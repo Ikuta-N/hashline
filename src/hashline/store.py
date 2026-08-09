@@ -491,15 +491,22 @@ class Store:
 
     # --- bibliography ----------------------------------------------------
 
-    def upsert_bib_entries(self, entries: Iterable[BibEntry]) -> int:
+    def upsert_bib_entries(
+        self, entries: Iterable[BibEntry], *, replace: bool = False
+    ) -> int:
         """Insert or update bibliography entries.
 
         Uses ``ON CONFLICT(citekey) DO UPDATE`` so re-importing a library
-        refreshes rather than fails.  Returns how many entries were written.
+        refreshes rather than fails.  With ``replace=True`` the existing
+        library is cleared first, in the same transaction as the insert, so a
+        re-import that dropped entries does not leave the old ones behind.
+        Returns how many entries were written.
         """
         stamp = _to_text(_utc_now())
         count = 0
         with self._conn:
+            if replace:
+                self._conn.execute("DELETE FROM bib_entries")
             for entry in entries:
                 self._conn.execute(
                     "INSERT INTO bib_entries "

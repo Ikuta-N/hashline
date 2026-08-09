@@ -151,6 +151,83 @@ class TestImport:
         assert result.exit_code != 0
 
 
+BIB_FIXTURE = Path(__file__).parent / "fixtures" / "bib" / "library.bib"
+
+
+class TestBibImport:
+    def test_reports_the_count(self, db: Path) -> None:
+        output = run(db, "bib", "import", str(BIB_FIXTURE))
+        assert "imported 7 entries" in output
+
+    def test_the_malformed_entry_is_reported_and_the_rest_still_land(
+        self, db: Path
+    ) -> None:
+        result = runner.invoke(
+            app, ["--db", str(db), "bib", "import", str(BIB_FIXTURE)]
+        )
+        assert result.exit_code == 0, result.output
+        assert "skipped" in result.output
+        assert "unclosed braces" in result.output
+        assert "imported 7 entries" in result.output
+
+    def test_replace_does_not_accumulate_duplicates(self, db: Path) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "bib", "import", str(BIB_FIXTURE), "--replace")
+        assert len(run(db, "bib", "list").splitlines()) == 7
+
+    def test_missing_file_fails(self, db: Path, tmp_path: Path) -> None:
+        result = runner.invoke(
+            app, ["--db", str(db), "bib", "import", str(tmp_path / "nope.bib")]
+        )
+        assert result.exit_code != 0
+
+
+class TestBibList:
+    def test_lists_entries_by_citekey(self, db: Path) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        lines = run(db, "bib", "list").splitlines()
+        assert lines == sorted(lines)
+        assert "smith2020" in "\n".join(lines)
+
+    def test_reports_an_empty_library(self, db: Path) -> None:
+        assert "no bibliography entries yet" in run(db, "bib", "list")
+
+
+class TestBibShow:
+    def test_shows_the_entry(self, db: Path) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        output = run(db, "bib", "show", "smith2020")
+        assert "smith2020" in output
+        assert "A Survey of Trigram Indexing" in output
+
+    def test_unknown_citekey_fails(self, db: Path) -> None:
+        result = runner.invoke(app, ["--db", str(db), "bib", "show", "nope"])
+        assert result.exit_code != 0
+
+
+class TestPin:
+    def test_bare_pin_reports_no_context(self, db: Path) -> None:
+        assert "no context pinned" in run(db, "pin")
+
+    def test_pin_sets_tags_and_shows_them(self, db: Path) -> None:
+        output = run(db, "pin", "research", "urgent")
+        assert "research" in output
+        assert "urgent" in output
+
+    def test_pin_show_reports_the_pinned_tags(self, db: Path) -> None:
+        run(db, "pin", "research")
+        assert "research" in run(db, "pin", "--show")
+
+    def test_pin_clear_empties_the_context(self, db: Path) -> None:
+        run(db, "pin", "research")
+        run(db, "pin", "--clear")
+        assert "no context pinned" in run(db, "pin")
+
+    def test_an_unusable_tag_fails(self, db: Path) -> None:
+        result = runner.invoke(app, ["--db", str(db), "pin", "two words"])
+        assert result.exit_code != 0
+
+
 class TestCollectDocuments:
     def test_reads_an_explicit_file_whatever_its_suffix(
         self, notes_dir: Path

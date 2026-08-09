@@ -12,9 +12,11 @@ from typing import Annotated, Final, cast
 
 import typer
 
+from hashline.bib import parse_bibtex
 from hashline.importer import Document, parse_documents
-from hashline.models import Note
+from hashline.models import BibEntry, Context, Note
 from hashline.store import Store, default_db_path
+from hashline.tags import normalize_tag
 
 #: Suffixes picked up when a directory is imported. An explicitly named file is
 #: read whatever it is called.
@@ -157,6 +159,99 @@ def import_(
     typer.echo(f"imported {len(stored)} notes from {len(documents)} files")
 
 
+bib_app = typer.Typer(
+    no_args_is_help=True, help="Manage a BibTeX library used for citations."
+)
+app.add_typer(bib_app, name="bib")
+
+
+@bib_app.command("import")
+def bib_import(
+    ctx: typer.Context,
+    path: Annotated[Path, typer.Argument(help="A .bib file.")],
+    replace: Annotated[
+        bool,
+        typer.Option("--replace", help="Clear the library before importing."),
+    ] = False,
+) -> None:
+    """Import bibliography entries from a BibTeX file."""
+    if not path.exists():
+        raise typer.BadParameter(f"no such file: {path}")
+    # cli.py owns all filesystem I/O; bib.py never opens a file itself.
+    text = path.read_text(encoding="utf-8")
+    entries, problems = parse_bibtex(text)
+    for problem in problems:
+        typer.echo(f"skipped {problem}", err=True)
+    with _open(ctx) as store:
+        count = store.upsert_bib_entries(entries, replace=replace)
+    typer.echo(f"imported {count} entries from {path}")
+    if problems:
+        typer.echo(f"skipped {len(problems)} entries")
+
+
+@bib_app.command("list")
+def bib_list(
+    ctx: typer.Context,
+    limit: Annotated[int | None, typer.Option("--limit", "-n")] = None,
+) -> None:
+    """List bibliography entries, ordered by citekey."""
+    with _open(ctx) as store:
+        entries = store.list_bib_entries(limit=limit)
+        if not entries:
+            typer.echo("no bibliography entries yet")
+            return
+        for entry in entries:
+            typer.echo(_format_bib_entry(entry))
+
+
+@bib_app.command("show")
+def bib_show(
+    ctx: typer.Context,
+    citekey: Annotated[str, typer.Argument(help="The entry's citekey.")],
+) -> None:
+    """Show one bibliography entry in full."""
+    with _open(ctx) as store:
+        entry = store.get_bib_entry(citekey)
+    if entry is None:
+        raise typer.BadParameter(f"no bibliography entry for citekey {citekey!r}")
+    typer.echo(_format_bib_detail(entry))
+
+
+@app.command()
+def pin(
+    ctx: typer.Context,
+    tag: Annotated[
+        list[str] | None,
+        typer.Argument(help="Tags to pin; replaces any previously pinned tags."),
+    ] = None,
+    show: Annotated[
+        bool, typer.Option("--show", help="Show the pinned context.")
+    ] = False,
+    clear: Annotated[
+        bool, typer.Option("--clear", help="Unpin the context.")
+    ] = False,
+) -> None:
+    """Pin a tag context that add_note_with_context applies to new notes.
+
+    With no arguments and no flags this shows the current context, so the
+    bare command is never a silent no-op. --show does exactly the same
+    thing; it exists so that intent reads clearly in scripts and history.
+    """
+    with _open(ctx) as store:
+        if clear:
+            store.clear_context()
+            typer.echo("context cleared")
+            return
+        if tag:
+            try:
+                normalized = [normalize_tag(name) for name in tag]
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+            current = store.get_context()
+            store.set_context(Context(tags=tuple(normalized), citekey=current.citekey))
+        typer.echo(_format_context(store.get_context()))
+
+
 def collect_documents(
     paths: Iterable[Path],
 ) -> tuple[list[Document], list[str]]:
@@ -189,6 +284,33 @@ def _iter_files(path: Path) -> Iterator[Path]:
         for child in path.rglob("*")
         if child.is_file() and child.suffix.lower() in TEXT_SUFFIXES
     )
+
+
+def _format_bib_entry(entry: BibEntry) -> str:
+    title = entry.title or "(no title)"
+    year = entry.year or "----"
+    return f"{entry.citekey:<24} {year}  {title}"
+
+
+def _format_bib_detail(entry: BibEntry) -> str:
+    lines = [
+        f"citekey  {entry.citekey}",
+        f"tag      #{entry.tag}",
+        f"type     {entry.entry_type}",
+        f"title    {entry.title or '-'}",
+        f"author   {entry.author or '-'}",
+        f"year     {entry.year or '-'}",
+        f"doi      {entry.doi or '-'}",
+    ]
+    return "\n".join(lines)
+
+
+def _format_context(context: Context) -> str:
+    if context.is_empty:
+        return "no context pinned"
+    tags = ", ".join(context.tags) if context.tags else "(none)"
+    citekey = context.citekey or "(none)"
+    return f"tags: {tags}  citekey: {citekey}"
 
 
 def _format_note(note: Note, tag_names: Sequence[str]) -> str:
