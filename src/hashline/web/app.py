@@ -734,7 +734,11 @@ def export_download(
     try:
 
         def sanitize(s: str) -> str:
-            return re.sub(r"[^\w\-]", "_", s)
+            # \w is Unicode-aware by default, so non-ASCII survives straight
+            # into the header -- and Starlette encodes header values as
+            # latin-1, which a bare Japanese or accented character cannot
+            # satisfy. re.ASCII restricts \w to plain ASCII word characters.
+            return re.sub(r"[^\w\-]", "_", s, flags=re.ASCII)
 
         if root_id is not None:
             notes = store.thread(root_id)
