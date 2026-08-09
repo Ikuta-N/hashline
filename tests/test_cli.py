@@ -545,6 +545,9 @@ class FakeEmbedder:
 def fake_model(monkeypatch: pytest.MonkeyPatch) -> FakeEmbedder:
     embedder = FakeEmbedder()
     monkeypatch.setattr("hashline.ml.embed.load_model", lambda name=None: embedder)
+    # The fake stands in for an installed backend, so availability has to
+    # agree with it -- the semantic search asks before it reads the index.
+    monkeypatch.setattr("hashline.ml.embed.is_available", lambda: True)
     return embedder
 
 
@@ -667,11 +670,29 @@ class TestSemanticSearch:
         output = run(db, "search", "aaa", "--semantic", "--limit", "2")
         assert len([line for line in output.splitlines() if line.strip()]) == 2
 
-    def test_says_so_when_nothing_is_indexed(self, db: Path) -> None:
+    def test_says_so_when_nothing_is_indexed(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
         run(db, "add", "one")
         output = run(db, "search", "one", "--semantic")
         assert "run `hashline index`" in output
         assert "no matches" not in output
+
+    def test_a_missing_extra_is_named_before_the_empty_index(
+        self, db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The first message has to be the actual cause.
+
+        Checked the other way round, a database with no vectors answers "run
+        hashline index" -- and only that command then reveals the extra was
+        never installed.
+        """
+        monkeypatch.setattr("hashline.ml.embed.is_available", lambda: False)
+        run(db, "add", "one")
+        result = runner.invoke(app, ["--db", str(db), "search", "one", "--semantic"])
+        assert result.exit_code == 1
+        assert "--extra ml" in result.output
+        assert "hashline index" not in result.output
 
     def test_warns_about_notes_added_since_the_last_index(
         self, db: Path, fake_model: FakeEmbedder

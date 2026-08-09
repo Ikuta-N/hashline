@@ -610,6 +610,15 @@ def _semantic_search(
     name = model_name if model_name is not None else embed.DEFAULT_MODEL
     key = embed.embedding_key(name)
 
+    if not embed.is_available():
+        # Checked before the index is consulted so the first message names the
+        # actual cause. Otherwise an unindexed database says "run hashline
+        # index", and only that command reveals the extra is missing.
+        typer.echo(
+            "semantic search needs the 'ml' extra: uv sync --extra ml", err=True
+        )
+        raise typer.Exit(1)
+
     rows = list(store.iter_embeddings(key))
     if tag is not None:
         allowed = {note.id for note in store.list_notes(tag=tag, limit=-1)}
