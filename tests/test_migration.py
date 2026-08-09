@@ -170,3 +170,42 @@ class TestMigration:
             assert "page" in cols
             assert "citekey" in cols
             assert "parent_id" in cols
+
+    def test_interrupted_migration_is_recoverable(
+        self, tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = tmp_path / "test.db"  # type: ignore[union-attr]
+        conn = sqlite3.connect(db)
+        _build_v1_db(conn)
+        conn.close()
+
+        from hashline.store import _MIGRATIONS
+        original_sql = _MIGRATIONS[2]
+        # Insert a syntax error halfway through the migration
+        broken_sql = original_sql.replace(
+            "ALTER TABLE notes ADD COLUMN citekey TEXT",
+            "SYNTAX ERROR BOOM;\nALTER TABLE notes ADD COLUMN citekey TEXT"
+        )
+        monkeypatch.setitem(_MIGRATIONS, 2, broken_sql)
+
+        with pytest.raises(sqlite3.OperationalError):
+            Store.open(db)
+
+        monkeypatch.undo()
+
+        # Verify the database state is unchanged.
+        conn = sqlite3.connect(db)
+        (version,) = conn.execute("PRAGMA user_version").fetchone()
+        assert version == 1
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(notes)").fetchall()}
+        assert "page" not in cols  # the first statement rolled back
+        assert "citekey" not in cols
+        conn.close()
+
+        # Now reopening should work, and apply the migration completely.
+        with Store.open(db) as store:
+            (version,) = store._conn.execute("PRAGMA user_version").fetchone()
+            assert version == SCHEMA_VERSION
+            notes = store.list_notes()
+            assert len(notes) == 1
+            assert notes[0].body == "hello #test"

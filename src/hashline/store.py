@@ -198,8 +198,20 @@ class Store:
 
         for version in range(current + 1, SCHEMA_VERSION + 1):
             sql = _MIGRATIONS[version]
-            self._conn.executescript(sql)
-            self._conn.execute(f"PRAGMA user_version = {version}")
+            # Migration strings contain no triggers or string literals with semicolons,
+            # so splitting on ';' is safe. We execute them inside a transaction so
+            # failures roll back instead of leaving a half-applied migration.
+            try:
+                self._conn.execute("BEGIN")
+                for statement in sql.split(";"):
+                    statement = statement.strip()
+                    if statement:
+                        self._conn.execute(statement)
+                self._conn.execute(f"PRAGMA user_version = {version}")
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def close(self) -> None:
         self._conn.close()
