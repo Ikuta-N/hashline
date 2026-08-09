@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Import - hashline{% endblock %}
+{% block content %}
+<div class="stack">
+  {% if notice %}
+    <div class="notice" style="margin-bottom: 1rem;">{{ notice }}</div>
+  {% endif %}
+  {% if error %}
+    <div class="error" style="margin-bottom: 1rem;">{{ error }}</div>
+  {% endif %}
+  {% if skipped %}
+    <div class="error" style="color: var(--muted); border-color: var(--line); margin-bottom: 1rem;">
+      <ul style="margin: 0; padding-left: 1.2rem;">
+        {% for problem in skipped %}
+          <li>skipped {{ problem }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  <h2>Import Notes</h2>
+  <div class="card" style="padding: 1.5rem; background: var(--card); border: 1px solid var(--line); border-radius: .5rem; margin-bottom: 2rem;">
+    <form method="post" action="/import" enctype="multipart/form-data" class="stack">
+      <div>
+        <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Path on server (supports directories)</label>
+        <input type="text" name="path" placeholder="/path/to/notes/" style="width: 100%; max-width: 400px; padding: .4rem;">
+        <p style="font-size: .85rem; color: var(--muted); margin-top: .25rem; margin-bottom: 0;">Reads files directly from the machine running the server. Do not expose this app to a network.</p>
+      </div>
+
+      <div>
+        <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Or upload files (browser)</label>
+        <input type="file" name="files" multiple style="width: 100%; max-width: 400px;">
+        <p style="font-size: .85rem; color: var(--muted); margin-top: .25rem; margin-bottom: 0;">Directories can only be imported via the path field above.</p>
+      </div>
+
+      <div style="display: flex; gap: 1rem; align-items: center;">
+        <div>
+          <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Mode</label>
+          <select name="mode" style="padding: .4rem;">
+            <option value="line">line</option>
+            <option value="heading">heading</option>
+            <option value="outline">outline</option>
+          </select>
+        </div>
+        <div>
+          <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Extra Tags</label>
+          <input type="text" name="tags" placeholder="tag1 tag2" style="width: 200px; padding: .4rem;">
+        </div>
+      </div>
+
+      <div>
+        <label style="display: flex; align-items: center; gap: .5rem;">
+          <input type="checkbox" name="dry_run" value="true">
+          <span>Dry run (report what would be imported without saving)</span>
+        </label>
+      </div>
+
+      <button type="submit" style="padding: .5rem 1rem; align-self: flex-start;">Import Notes</button>
+    </form>
+  </div>
+
+  <h2>Import Bibliography</h2>
+  <div class="card" style="padding: 1.5rem; background: var(--card); border: 1px solid var(--line); border-radius: .5rem;">
+    <form method="post" action="/bib/import" enctype="multipart/form-data" class="stack">
+      <div>
+        <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Path to .bib on server</label>
+        <input type="text" name="path" placeholder="/path/to/library.bib" style="width: 100%; max-width: 400px; padding: .4rem;">
+        <p style="font-size: .85rem; color: var(--muted); margin-top: .25rem; margin-bottom: 0;">Reads files directly from the machine running the server. Do not expose this app to a network.</p>
+      </div>
+
+      <div>
+        <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Or upload .bib (browser)</label>
+        <input type="file" name="file" accept=".bib" style="width: 100%; max-width: 400px;">
+      </div>
+
+      <div>
+        <label style="display: flex; align-items: center; gap: .5rem;">
+          <input type="checkbox" name="replace" value="true">
+          <span>Replace (clear the library before importing, keeping entries cited by notes)</span>
+        </label>
+      </div>
+
+      <button type="submit" style="padding: .5rem 1rem; align-self: flex-start;">Import Bibliography</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

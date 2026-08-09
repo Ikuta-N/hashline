@@ -1,13 +1,26 @@
 <section id="timeline">
-  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
-  {% for note, tag_names in notes %}
-    <article class="note">
-      <p>{{ note.body }}</p>
-      <div class="meta">
-        {{ note.created_at.strftime('%Y-%m-%d %H:%M') }}
-        {% if tag_names %} · {{ tag_names | join(', ') }}{% endif %}
-      </div>
-    </article>
+  {% if notice %}
+    <p class="notice" role="status">{{ notice }}</p>
+  {% endif %}
+  {% if error %}
+    <p class="error" role="alert">
+      {{ error }}
+      {% if delete_retry_id %}
+        <form hx-post="/notes/{{ delete_retry_id }}/delete" hx-target="#timeline" hx-swap="outerHTML" style="display:inline;">
+          <input type="hidden" name="recursive" value="true">
+          <input type="hidden" name="q" value="{{ q }}">
+          <input type="hidden" name="tag" value="{{ tag }}">
+          <input type="hidden" name="citekey" value="{{ citekey }}">
+          {# Omitted rather than sent empty: an empty string is not a bool. #}
+          {% if roots_only %}<input type="hidden" name="roots_only" value="true">{% endif %}
+          <input type="hidden" name="limit" value="{{ limit }}">
+          <button type="submit">delete the whole thread</button>
+        </form>
+      {% endif %}
+    </p>
+  {% endif %}
+  {% for note, tag_names, indent in notes %}
+    {% include "_note.html" %}
   {% else %}
     <p class="empty">{% if q %}no matches{% else %}no notes yet{% endif %}</p>
   {% endfor %}

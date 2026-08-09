@@ -8,7 +8,7 @@ inline `#hashtags`, retrieve it later by tag or full-text search.
 - Core logic (`store.py`, `tags.py`) must be pure Python with no web/CLI
   dependency. All tests target the core.
 - Storage: SQLite via stdlib `sqlite3`, with FTS5 for search. No ORM.
-- Web layer is a thin adapter over the core. Same for the CLI.
+- Web layer is a thin adapter over the core. Same for the CLI. All filesystem I/O belongs in the adapter layer (cli.py and files.py).
 - Full type hints. `mypy src` must pass.
 - Python 3.12, managed with uv.
 

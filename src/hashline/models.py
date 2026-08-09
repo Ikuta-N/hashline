@@ -6,6 +6,7 @@ They are the vocabulary shared by the store, the importer and the adapters.
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Final
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,3 +100,7 @@ class Context:
     @property
     def is_empty(self) -> bool:
         return not self.tags and self.citekey is None
+
+
+#: The tag `read start` pins alongside a citekey, unless --tag overrides it.
+DEFAULT_READING_TAG: Final = "reading"

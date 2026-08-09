@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Bibliography - hashline{% endblock %}
+{% block content %}
+{% include "_context.html" %}
+<div class="stack">
+  {% if entries %}
+    <div style="overflow-x: auto;">
+      <table style="width: 100%; border-collapse: collapse; text-align: left;">
+        <thead>
+          <tr style="border-bottom: 1px solid var(--line);">
+            <th style="padding: 0.5rem;">Citekey</th>
+            <th style="padding: 0.5rem;">Year</th>
+            <th style="padding: 0.5rem;">Title</th>
+            <th style="padding: 0.5rem;">Author</th>
+            <th style="padding: 0.5rem;"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for entry in entries %}
+            <tr style="border-bottom: 1px solid var(--line);">
+              <td style="padding: 0.5rem;"><a href="/bib/{{ entry.citekey }}">{{ entry.citekey }}</a></td>
+              <td style="padding: 0.5rem;">{{ entry.year or '----' }}</td>
+              <td style="padding: 0.5rem;">{{ entry.title or '(no title)' }}</td>
+              <td style="padding: 0.5rem;">{{ entry.author or '-' }}</td>
+              <td style="padding: 0.5rem;">
+                <form hx-post="/context/read" hx-target="#context-strip" hx-swap="outerHTML" style="margin: 0;">
+                  <input type="hidden" name="context_citekey" value="{{ entry.citekey }}">
+                  <button type="submit" style="padding: 0.3rem 0.6rem; font-size: 0.85rem;">Read</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="empty" style="text-align: center; color: var(--muted); padding: 2rem;">
+      Library is empty. <a href="/import">Import a .bib file</a>
+    </p>
+  {% endif %}
+</div>
+{% endblock %}

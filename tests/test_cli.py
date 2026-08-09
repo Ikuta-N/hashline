@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from hashline.cli import app, collect_documents
+from hashline.cli import app
 
 runner = CliRunner()
 
@@ -63,14 +63,14 @@ class TestAdd:
     ) -> None:
         run(db, "bib", "import", str(BIB_FIXTURE))
         run(db, "read", "start", "smith2020")
-        
+
         # Replace bibliography with an empty one
         empty_bib = tmp_path / "empty.bib"
         empty_bib.write_text("", encoding="utf-8")
         runner.invoke(
             app, ["--db", str(db), "bib", "import", str(empty_bib), "--replace"]
         )
-        
+
         # Adding a note should now fail with a nice error
         result = runner.invoke(app, ["--db", str(db), "add", "a note"])
         assert result.exit_code != 0
@@ -226,15 +226,32 @@ class TestBibImport:
         )
         assert result.exit_code != 0
 
+    def test_non_utf8_file_fails_with_a_readable_message(
+        self, db: Path, tmp_path: Path
+    ) -> None:
+        # Path.read_text(encoding="utf-8") raises UnicodeDecodeError, a
+        # ValueError subclass, on a latin-1 .bib file -- ordinary for
+        # BibTeX. It must come back as a BadParameter, not a traceback.
+        bib_file = tmp_path / "library.bib"
+        bib_file.write_bytes(
+            "@article{muller2020, author={Müller, Hans}, "
+            "title={Titel}}".encode("latin-1")
+        )
+        result = runner.invoke(
+            app, ["--db", str(db), "bib", "import", str(bib_file)]
+        )
+        assert result.exit_code != 0
+        assert "could not read" in result.output
+
     def test_replace_keeps_cited_entries(self, db: Path, tmp_path: Path) -> None:
         run(db, "bib", "import", str(BIB_FIXTURE))
         run(db, "read", "start", "smith2020")
         run(db, "add", "note that cites the work")
-        
+
         # Replace with an empty bibliography
         empty_bib = tmp_path / "empty.bib"
         empty_bib.write_text("", encoding="utf-8")
-        
+
         result = runner.invoke(
             app, ["--db", str(db), "bib", "import", str(empty_bib), "--replace"]
         )
@@ -356,30 +373,6 @@ class TestRead:
         run(db, "read", "start", "smith2020")
         output = run(db, "add", "a note", "--page", page)
         assert page in output
-
-
-class TestCollectDocuments:
-    def test_reads_an_explicit_file_whatever_its_suffix(self, notes_dir: Path) -> None:
-        documents, skipped = collect_documents([notes_dir / "ignored.json"])
-        assert len(documents) == 1
-        assert skipped == []
-
-    def test_directory_walk_keeps_only_text_suffixes(self, notes_dir: Path) -> None:
-        documents, _ = collect_documents([notes_dir])
-        assert {Path(doc.source).name for doc in documents} == {
-            "daily.md",
-            "empty.md",
-            "fenced.md",
-            "scratch.txt",
-        }
-
-    def test_reports_a_file_it_cannot_decode(self, tmp_path: Path) -> None:
-        broken = tmp_path / "broken.txt"
-        broken.write_bytes(b"\xff\xfe not utf-8")
-        documents, skipped = collect_documents([tmp_path])
-        assert documents == []
-        assert len(skipped) == 1
-        assert "broken.txt" in skipped[0]
 
 
 class TestReply:
@@ -520,6 +513,7 @@ class TestExport:
         # root A is 1, child A is 2, root B is 3, child B is 4.
         # Check child B's parent is root B (3), not root A (1).
         import sqlite3
+
         conn = sqlite3.connect(db)
         query = "SELECT id, body, parent_id FROM notes ORDER BY id"
         rows = conn.execute(query).fetchall()

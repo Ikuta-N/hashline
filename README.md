@@ -61,6 +61,30 @@ Capture, tag filtering and search-as-you-type over the same database the CLI
 uses; it honours `$HASHLINE_DB`. HTMX is vendored under
 `src/hashline/web/static/`, so the page needs no CDN and works offline.
 
+### Feature Parity
+
+The Web UI implements equivalent functionality to the CLI commands:
+
+| CLI command | Web UI route |
+|---|---|
+| `hashline list` | `GET /` |
+| `hashline add` | `POST /notes` |
+| `hashline rm` | `POST /notes/{id}/delete` |
+| `hashline reply` | `POST /notes` (with parent_id) |
+| `hashline thread` | `GET /` (with root filter) |
+| `hashline search` | `GET /` (with q) |
+| `hashline pin` | `POST /context/pin`, `POST /context/clear_tags` |
+| `hashline read` | `POST /context/read`, `POST /context/clear_read` |
+| `hashline bib list` | `GET /bib` |
+| `hashline bib show` | `GET /bib/{citekey}` |
+| `hashline import` | `POST /import` (also supports browser uploads) |
+| `hashline bib import` | `POST /bib/import` (also supports browser uploads) |
+| `hashline export` | `GET /export`, `GET /export/download` |
+
+One deliberate difference: `hashline read start` replaces the pinned tags, while `POST /context/read` adds the reading tag to them. The context strip shows the pinned tags and the pinned work side by side with a clear button each, so starting a read there should not empty the column next to it.
+
+> **Security Note:** The `path` field in both `/import` and `/bib/import` reads files directly from the local filesystem on the machine running the server. Do not expose this web app to a network. All state-changing routes also reject a POST whose `Origin` header does not match the server's own host, so a form on another site left open in the same browser cannot delete notes or replace the bibliography; a request with no `Origin` header (curl, the CLI) is still allowed through.
+
 ### `import`
 
 ```

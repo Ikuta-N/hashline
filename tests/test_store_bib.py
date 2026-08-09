@@ -70,10 +70,10 @@ class TestUpsertBibEntries:
 
         # Now replace with a completely different library (empty for simplicity)
         written, kept = store.upsert_bib_entries([], replace=True)
-        
+
         assert written == 0
         assert kept == 1
-        
+
         # smith2020 should survive because it's cited
         assert store.get_bib_entry("smith2020") is not None
         # tanaka2019 should be gone because it's not cited

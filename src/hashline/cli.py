@@ -5,7 +5,7 @@ formatting, and holds no note logic of its own.
 """
 
 import re
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Final, cast
@@ -13,21 +13,15 @@ from typing import Annotated, Final, cast
 import typer
 
 from hashline.bib import parse_bibtex
-from hashline.importer import Document, parse_documents
-from hashline.models import BibEntry, Context, Note
+from hashline.files import read_documents
+from hashline.importer import parse_documents
+from hashline.models import DEFAULT_READING_TAG, BibEntry, Context, Note
 from hashline.outline import build_tree, render_markdown
 from hashline.store import NoteHasReplies, Store, default_db_path
 from hashline.tags import normalize_tag
 
-#: Suffixes picked up when a directory is imported. An explicitly named file is
-#: read whatever it is called.
-TEXT_SUFFIXES: Final = frozenset({".md", ".markdown", ".txt"})
-
 _BODY_WIDTH: Final = 90
 _WHITESPACE_RE: Final = re.compile(r"\s+")
-
-#: The tag `read start` pins alongside a citekey, unless --tag overrides it.
-_DEFAULT_READING_TAG: Final = "reading"
 
 
 class Mode(StrEnum):
@@ -300,7 +294,10 @@ def import_(
     ] = False,
 ) -> None:
     """Import text and Markdown files as notes."""
-    documents, skipped = collect_documents(paths)
+    try:
+        documents, skipped = read_documents(paths)
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     for problem in skipped:
         typer.echo(f"skipped {problem}", err=True)
     try:
@@ -335,7 +332,10 @@ def bib_import(
     if not path.exists():
         raise typer.BadParameter(f"no such file: {path}")
     # cli.py owns all filesystem I/O; bib.py never opens a file itself.
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise typer.BadParameter(f"could not read {path}: {exc}") from exc
     entries, problems = parse_bibtex(text)
     for problem in problems:
         typer.echo(f"skipped {problem}", err=True)
@@ -431,7 +431,7 @@ def read_start(
     tag: Annotated[
         str,
         typer.Option("--tag", "-t", help="Extra tag pinned alongside the citekey."),
-    ] = _DEFAULT_READING_TAG,
+    ] = DEFAULT_READING_TAG,
 ) -> None:
     """Pin CITEKEY as the work being read.
 
@@ -475,40 +475,6 @@ def _format_read_status(store: Store) -> str:
     title = entry.title if entry is not None and entry.title else "(no title)"
     tags = ", ".join(context.tags) if context.tags else "(none)"
     return f"{context.citekey}  {title}\ntags: {tags}"
-
-
-def collect_documents(
-    paths: Iterable[Path],
-) -> tuple[list[Document], list[str]]:
-    """Read every importable file under ``paths``.
-
-    Returns the documents plus a list of human-readable problems for files that
-    could not be read. This is the only place the importer path touches disk.
-    """
-    documents: list[Document] = []
-    skipped: list[str] = []
-    for path in paths:
-        if not path.exists():
-            raise typer.BadParameter(f"no such file or directory: {path}")
-        for file in _iter_files(path):
-            try:
-                text = file.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError) as exc:
-                skipped.append(f"{file}: {exc}")
-                continue
-            documents.append(Document(source=str(file), text=text))
-    return documents, skipped
-
-
-def _iter_files(path: Path) -> Iterator[Path]:
-    if path.is_file():
-        yield path
-        return
-    yield from sorted(
-        child
-        for child in path.rglob("*")
-        if child.is_file() and child.suffix.lower() in TEXT_SUFFIXES
-    )
 
 
 def _format_bib_entry(entry: BibEntry) -> str:
