@@ -15,7 +15,7 @@ import typer
 from hashline.bib import parse_bibtex
 from hashline.importer import Document, parse_documents
 from hashline.models import BibEntry, Context, Note
-from hashline.store import Store, default_db_path
+from hashline.store import NoteHasReplies, Store, default_db_path
 from hashline.tags import normalize_tag
 
 #: Suffixes picked up when a directory is imported. An explicitly named file is
@@ -115,15 +115,101 @@ def list_(
         str | None, typer.Option("--citekey", "-c", help="Only this citekey.")
     ] = None,
     limit: Annotated[int, typer.Option("--limit", "-n")] = 20,
+    roots_only: Annotated[
+        bool, typer.Option("--roots-only", help="Hide replies.")
+    ] = False,
 ) -> None:
     """Show the timeline, newest first."""
     with _open(ctx) as store:
-        notes = store.list_notes(tag=tag, citekey=citekey, limit=limit)
+        notes = store.list_notes(
+            tag=tag, citekey=citekey, limit=limit, roots_only=roots_only
+        )
         if not notes:
             typer.echo("no notes yet")
             return
         for note in notes:
             typer.echo(_format_note(note, store.tags_for_note(note.id)))
+
+
+@app.command()
+def reply(
+    ctx: typer.Context,
+    parent_id: Annotated[int, typer.Argument(help="ID of the note to reply to.")],
+    text: Annotated[str, typer.Argument(help="The reply body.")],
+    page: Annotated[
+        str | None,
+        typer.Option("--page", help="Page reference; requires a pinned citekey."),
+    ] = None,
+) -> None:
+    """Reply to an existing note."""
+    with _open(ctx) as store:
+        try:
+            if page is not None and store.get_context().citekey is None:
+                raise typer.BadParameter(
+                    "--page requires a pinned citekey; see `hashline read start`"
+                )
+            note = store.add_note_with_context(
+                text, page=page, parent_id=parent_id
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        typer.echo(_format_note(note, store.tags_for_note(note.id)))
+
+
+@app.command()
+def thread(
+    ctx: typer.Context,
+    note_id: Annotated[int, typer.Argument(help="ID of the thread root.")],
+) -> None:
+    """Show a thread of notes."""
+    with _open(ctx) as store:
+        try:
+            notes = store.thread(note_id)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+
+        depths: dict[int, int] = {}
+        for note in notes:
+            if note.parent_id is None or note.parent_id not in depths:
+                depths[note.id] = 0
+            else:
+                depths[note.id] = depths[note.parent_id] + 1
+
+            indent = "  " * depths[note.id]
+            body = _format_note(note, store.tags_for_note(note.id))
+            typer.echo(f"{indent}{body}")
+
+
+@app.command()
+def rm(
+    ctx: typer.Context,
+    note_id: Annotated[int, typer.Argument(help="ID of the note to delete.")],
+    recursive: Annotated[
+        bool, typer.Option("--recursive", help="Delete this note and all its replies.")
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Skip confirmation.")
+    ] = False,
+) -> None:
+    """Delete a note."""
+    if not yes:
+        typer.confirm(f"Are you sure you want to delete note {note_id}?", abort=True)
+    with _open(ctx) as store:
+        try:
+            count = store.delete_note(note_id, recursive=recursive)
+        except NoteHasReplies as exc:
+            typer.echo(
+                f"note {exc.note_id} has {exc.reply_count} replies; "
+                "use --recursive to delete the whole thread",
+                err=True,
+            )
+            raise typer.Exit(1) from exc
+        if count == 0:
+            typer.echo(f"note {note_id} not found", err=True)
+            raise typer.Exit(1)
+
+        suffix = "s" if count != 1 else ""
+        typer.echo(f"deleted {count} note{suffix}")
 
 
 @app.command()

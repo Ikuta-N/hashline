@@ -86,6 +86,16 @@ class TestList:
         run(db, "add", "line one\nline two")
         assert "line one line two" in run(db, "list")
 
+    def test_roots_only_excludes_replies(self, db: Path) -> None:
+        output = run(db, "add", "parent note")
+        # Extract the note ID from the output string "    1  2026-08-09 ... parent note"
+        parent_id = output.split()[0]
+        run(db, "reply", parent_id, "child note")
+        
+        timeline = run(db, "list", "--roots-only")
+        assert "parent note" in timeline
+        assert "child note" not in timeline
+
 
 class TestSearch:
     def test_prints_a_score_and_the_note(self, db: Path) -> None:
@@ -258,11 +268,13 @@ class TestRead:
         assert "A Survey of Trigram Indexing" in output
         assert "reading" in output
 
-    def test_stop_unpins_the_work(self, db: Path) -> None:
+    def test_stop_clears_the_context(self, db: Path) -> None:
         run(db, "bib", "import", str(BIB_FIXTURE))
         run(db, "read", "start", "smith2020")
         run(db, "read", "stop")
         assert "nothing pinned" in run(db, "read", "status")
+
+
 
     def test_start_with_an_unknown_citekey_fails(self, db: Path) -> None:
         result = runner.invoke(app, ["--db", str(db), "read", "start", "nope"])
@@ -325,3 +337,78 @@ class TestCollectDocuments:
         assert documents == []
         assert len(skipped) == 1
         assert "broken.txt" in skipped[0]
+
+
+class TestReply:
+    def test_reply_attaches_to_parent(self, db: Path) -> None:
+        output = run(db, "add", "parent")
+        parent_id = output.split()[0]
+
+        reply_out = run(db, "reply", parent_id, "child")
+        assert "child" in reply_out
+
+        timeline = run(db, "list")
+        assert "child" in timeline
+        assert "parent" in timeline
+
+    def test_reply_missing_parent_fails(self, db: Path) -> None:
+        result = runner.invoke(app, ["--db", str(db), "reply", "999", "nope"])
+        assert result.exit_code != 0
+        assert "parent_id 999 does not exist" in result.output
+
+
+class TestThread:
+    def test_prints_thread_with_indentation(self, db: Path) -> None:
+        p_out = run(db, "add", "parent")
+        parent_id = p_out.split()[0]
+        c1_out = run(db, "reply", parent_id, "child 1")
+        child1_id = c1_out.split()[0]
+        run(db, "reply", child1_id, "grandchild")
+        run(db, "reply", parent_id, "child 2")
+
+        thread = run(db, "thread", parent_id).splitlines()
+        assert len(thread) == 4
+        assert thread[0].startswith(" ")
+        assert "parent" in thread[0]
+        assert thread[1].startswith("    ")
+        assert "child 1" in thread[1]
+        assert thread[2].startswith("      ")
+        assert "grandchild" in thread[2]
+        assert thread[3].startswith("    ")
+        assert "child 2" in thread[3]
+
+    def test_missing_thread_root_fails(self, db: Path) -> None:
+        result = runner.invoke(app, ["--db", str(db), "thread", "999"])
+        assert result.exit_code != 0
+        assert "does not exist" in result.output
+
+
+class TestRm:
+    def test_rm_deletes_a_note(self, db: Path) -> None:
+        out = run(db, "add", "doomed")
+        note_id = out.split()[0]
+        run(db, "rm", note_id, "--yes")
+        assert "no notes yet" in run(db, "list")
+
+    def test_rm_missing_note_fails(self, db: Path) -> None:
+        result = runner.invoke(app, ["--db", str(db), "rm", "999", "--yes"])
+        assert result.exit_code != 0
+        assert "note 999 not found" in result.output
+
+    def test_rm_refuses_to_delete_parent_without_recursive(self, db: Path) -> None:
+        p_out = run(db, "add", "parent")
+        parent_id = p_out.split()[0]
+        run(db, "reply", parent_id, "child")
+
+        result = runner.invoke(app, ["--db", str(db), "rm", parent_id, "--yes"])
+        assert result.exit_code != 0
+        assert "has 1 replies" in result.output
+        assert "use --recursive" in result.output
+
+    def test_rm_recursive_deletes_thread(self, db: Path) -> None:
+        p_out = run(db, "add", "parent")
+        parent_id = p_out.split()[0]
+        run(db, "reply", parent_id, "child")
+
+        out = run(db, "rm", parent_id, "--yes", "--recursive")
+        assert "deleted 2 notes" in out
