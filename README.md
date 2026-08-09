@@ -7,6 +7,9 @@ Local-first micro-notes. Capture a thought in one line, tag it with inline
 
 Everything lives in one SQLite file on your machine. Nothing is uploaded.
 
+![A hashline session: capture, list, keyword search, then a semantic search
+finding a note that shares no characters with the query](docs/cli-session.png)
+
 - **One line in, one note out.** No titles, no folders, no editor.
 - **Tags come from the text.** Write `#sqlite` in the note and it is tagged.
 - **Search that works in Japanese.** The FTS5 index uses the trigram
@@ -175,6 +178,9 @@ Things worth knowing:
 uv run uvicorn hashline.web.app:app --reload
 # http://127.0.0.1:8000
 ```
+
+![The hashline web UI: the pinned-context strip, the composer, tag chips, and
+a timeline with a reply nested under its parent](docs/web-ui.png)
 
 Capture, tag filtering and search-as-you-type over the same database the CLI
 uses; it honours `$HASHLINE_DB`. HTMX is vendored under
