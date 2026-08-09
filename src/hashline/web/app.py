@@ -1,3 +1,4 @@
+
 """FastAPI + HTMX adapter.
 
 Holds no note logic: it resolves a request into a store call and renders the
@@ -5,6 +6,7 @@ result. A fresh connection is opened per request, because a sqlite3 connection
 must not be shared across the threads FastAPI runs sync handlers on.
 """
 
+import re
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Final
@@ -163,7 +165,9 @@ def create_note(
         request=request,
         name="_timeline.html",
         context={
-            "notes": _timeline(store, q=q, tag=tag, citekey=citekey, roots_only=roots_only, limit=limit),
+            "notes": _timeline(
+                store, q=q, tag=tag, citekey=citekey, roots_only=roots_only, limit=limit
+            ),
             "q": q,
             "tag": tag,
             "error": error,
@@ -183,7 +187,12 @@ def reply_fragment(
     return templates.TemplateResponse(
         request=request,
         name="_reply.html",
-        context={"note_id": note_id, "pinned_citekey": store.get_context().citekey, "tag": tag, "q": q},
+        context={
+            "note_id": note_id,
+            "pinned_citekey": store.get_context().citekey,
+            "tag": tag,
+            "q": q,
+        },
     )
 
 
@@ -253,7 +262,9 @@ def delete_note(
         request=request,
         name="_timeline.html",
         context={
-            "notes": _timeline(store, q=q, tag=tag, citekey=citekey, roots_only=roots_only, limit=limit),
+            "notes": _timeline(
+                store, q=q, tag=tag, citekey=citekey, roots_only=roots_only, limit=limit
+            ),
             "q": q,
             "tag": tag,
             "error": error,
@@ -291,7 +302,7 @@ def _timeline(
             yield root.note, store.tags_for_note(root.note.id), depth
             yield from flatten(root.children, depth + 1)
 
-    return list(flatten(reversed(build_tree(found))))
+    return list(flatten(list(reversed(build_tree(found)))))
 
 
 def _context_data(store: Store, error: str | None = None) -> dict[str, Any]:
@@ -626,7 +637,7 @@ def export(
     error = None
     markdown = ""
     root_id = None
-    
+
     if root.strip():
         try:
             root_id = int(root.strip())
@@ -666,7 +677,7 @@ def export(
     )
 
 
-import re
+
 
 @app.get("/export/download")
 def export_download(
@@ -679,7 +690,7 @@ def export_download(
     """Download exported notes as Markdown."""
     error = None
     root_id = None
-    
+
     if root.strip():
         try:
             root_id = int(root.strip())
@@ -704,8 +715,9 @@ def export_download(
         )
 
     try:
+
         def sanitize(s: str) -> str:
-            return re.sub(r'[^\w\-]', '_', s)
+            return re.sub(r"[^\w\-]", "_", s)
 
         if root_id is not None:
             notes = store.thread(root_id)
