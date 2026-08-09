@@ -1,0 +1,4 @@
+FTS5 の bm25 を調べた #sqlite
+
+trigram tokenizer は日本語に効く #sqlite #検索
+一行メモをためす
