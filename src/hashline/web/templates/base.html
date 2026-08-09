@@ -53,11 +53,12 @@
   .note p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   .meta { margin-top: .35rem; font-size: .78rem; color: var(--muted); }
   .empty { padding: 2rem 0; color: var(--muted); text-align: center; }
-  .error {
+  .error, .notice {
     margin: 0 0 .75rem; padding: .6rem .9rem; font-size: .9rem;
-    color: var(--danger); background: var(--card);
-    border: 1px solid var(--danger); border-radius: .5rem;
+    background: var(--card); border-radius: .5rem;
   }
+  .error  { color: var(--danger); border: 1px solid var(--danger); }
+  .notice { color: var(--muted);  border: 1px solid var(--line); }
 </style>
 </head>
 <body>

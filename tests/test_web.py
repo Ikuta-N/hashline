@@ -296,6 +296,10 @@ class TestDeleteNote:
         assert response.status_code == 200
         assert "deleted 1 note" in response.text
         assert "to delete" not in response.text
+        # A completed deletion is not a failure, so it must not land in the
+        # error box.
+        assert 'class="notice"' in response.text
+        assert 'class="error"' not in response.text
 
     def test_deleting_parent_answers_200_and_offers_recursive(
         self, client: TestClient, tmp_path: Path
@@ -305,9 +309,12 @@ class TestDeleteNote:
             store.add_note("child", parent_id=1)
         response = client.post("/notes/1/delete")
         assert response.status_code == 200
-        assert "note 1 has 1 replies" in response.text
+        assert "note 1 has 1 reply" in response.text
         assert "parent" in response.text # keeps the note
         assert 'name="recursive" value="true"' in response.text # offers recursive
+        assert 'class="error"' in response.text
+        # The reader of this message has a button, not a command-line flag.
+        assert "--recursive" not in response.text
 
     def test_recursive_delete_removes_whole_thread(
         self, client: TestClient, tmp_path: Path

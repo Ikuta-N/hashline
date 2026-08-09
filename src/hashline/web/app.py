@@ -204,6 +204,7 @@ def delete_note(
     q: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     error: str | None = None
+    notice: str | None = None
     delete_retry_id: int | None = None
     try:
         count = store.delete_note(note_id, recursive=recursive)
@@ -211,11 +212,13 @@ def delete_note(
             error = f"note {note_id} not found"
         else:
             suffix = "s" if count != 1 else ""
-            error = f"deleted {count} note{suffix}"
+            notice = f"deleted {count} note{suffix}"
     except NoteHasReplies as exc:
+        # No CLI flag names here: the reader of this message has a button, not
+        # a --recursive switch.
         error = (
-            f"note {exc.note_id} has {exc.reply_count} replies; "
-            "use --recursive to delete the whole thread"
+            f"note {exc.note_id} has {exc.reply_count} "
+            f"{'reply' if exc.reply_count == 1 else 'replies'}"
         )
         delete_retry_id = note_id
 
@@ -227,9 +230,11 @@ def delete_note(
             "q": q,
             "tag": tag,
             "error": error,
+            "notice": notice,
             "delete_retry_id": delete_retry_id,
         },
     )
+
 
 def _timeline(
     store: Store,
