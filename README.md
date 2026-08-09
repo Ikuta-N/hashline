@@ -50,41 +50,11 @@ uv run hashline import ~/notes --mode heading --tag imported
 Every command takes `--db PATH`. Without it the database is `$HASHLINE_DB`,
 and failing that `~/.local/share/hashline/hashline.db`.
 
-## Web UI
+## Working with notes
 
-```bash
-uv run uvicorn hashline.web.app:app --reload
-# http://127.0.0.1:8000
-```
-
-Capture, tag filtering and search-as-you-type over the same database the CLI
-uses; it honours `$HASHLINE_DB`. HTMX is vendored under
-`src/hashline/web/static/`, so the page needs no CDN and works offline.
-
-### Feature Parity
-
-The Web UI implements equivalent functionality to the CLI commands:
-
-| CLI command | Web UI route |
-|---|---|
-| `hashline list` | `GET /` |
-| `hashline add` | `POST /notes` |
-| `hashline rm` | `POST /notes/{id}/delete` |
-| `hashline reply` | `POST /notes` (with parent_id) |
-| `hashline thread` | `GET /` (with root filter) |
-| `hashline search` | `GET /` (with q) |
-| `hashline pin` | `POST /context/pin`, `POST /context/clear_tags` |
-| `hashline read` | `POST /context/read`, `POST /context/clear_read` |
-| `hashline bib list` | `GET /bib` |
-| `hashline bib show` | `GET /bib/{citekey}` |
-| `hashline import` | `POST /import` (also supports browser uploads) |
-| `hashline bib import` | `POST /bib/import` (also supports browser uploads) |
-| `hashline export` | `GET /export`, `GET /export/download` |
-| `hashline index`, `search --semantic` | *CLI only* |
-
-One deliberate difference: `hashline read start` replaces the pinned tags, while `POST /context/read` adds the reading tag to them. The context strip shows the pinned tags and the pinned work side by side with a clear button each, so starting a read there should not empty the column next to it.
-
-> **Security Note:** The `path` field in both `/import` and `/bib/import` reads files directly from the local filesystem on the machine running the server. Do not expose this web app to a network. All state-changing routes also reject a POST whose `Origin` header does not match the server's own host, so a form on another site left open in the same browser cannot delete notes or replace the bibliography; a request with no `Origin` header (curl, the CLI) is still allowed through.
+Beyond the commands in the quick start, the CLI can bulk-import files, run a
+citation-aware reading workflow, keep tags pinned across captures, and build
+reply threads.
 
 ### `import`
 
@@ -185,7 +155,7 @@ Things worth knowing:
 - `export` promotes a note whose parent is outside the selection to a root, so filtering never makes replies disappear.
 - There is no reparenting: restructuring means deleting and re-entering.
 
-### Things worth knowing about search
+### Search
 
 - Results are ranked by BM25 and printed best-first. The score shown is
   `-bm25()`, so **higher is better**. On a very small database the score can
@@ -199,61 +169,41 @@ Things worth knowing:
   [Semantic search](#semantic-search). It needs the `ml` extra and a
   `hashline index` pass, and says so when either is missing.
 
-## Upgrading
-
-This release carries the project's first schema migrations. An existing database is upgraded in place the next time it is opened, and going back to an older version of `hashline` afterwards will not work.
-
-Before upgrading, it is recommended to copy your database file to back it up. The database location is specified by `$HASHLINE_DB`, or defaults to `~/.local/share/hashline/hashline.db`:
+## Web UI
 
 ```bash
-cp "${HASHLINE_DB:-$HOME/.local/share/hashline/hashline.db}" ~/hashline.db.bak
+uv run uvicorn hashline.web.app:app --reload
+# http://127.0.0.1:8000
 ```
 
-## Development
+Capture, tag filtering and search-as-you-type over the same database the CLI
+uses; it honours `$HASHLINE_DB`. HTMX is vendored under
+`src/hashline/web/static/`, so the page needs no CDN and works offline.
 
-```bash
-uv sync --dev          # dev tools; note this does NOT install the ml extra
-uv run ruff check .
-uv run mypy src
-uv run pytest
-```
+### Feature Parity
 
-### Tests
+The Web UI implements equivalent functionality to the CLI commands:
 
-```bash
-uv run pytest                                     # the default suite
-uv run pytest --cov=src --cov-report=term-missing # with coverage
-uv run pytest -m slow                             # model-dependent tests only
-```
+| CLI command | Web UI route |
+|---|---|
+| `hashline list` | `GET /` |
+| `hashline add` | `POST /notes` |
+| `hashline rm` | `POST /notes/{id}/delete` |
+| `hashline reply` | `POST /notes` (with parent_id) |
+| `hashline thread` | `GET /` (with root filter) |
+| `hashline search` | `GET /` (with q) |
+| `hashline pin` | `POST /context/pin`, `POST /context/clear_tags` |
+| `hashline read` | `POST /context/read`, `POST /context/clear_read` |
+| `hashline bib list` | `GET /bib` |
+| `hashline bib show` | `GET /bib/{citekey}` |
+| `hashline import` | `POST /import` (also supports browser uploads) |
+| `hashline bib import` | `POST /bib/import` (also supports browser uploads) |
+| `hashline export` | `GET /export`, `GET /export/download` |
+| `hashline index`, `search --semantic` | *CLI only* |
 
-Tests marked `slow` need an embedding model downloaded and are excluded by
-default; CI never runs them. Import fixtures under `tests/fixtures/` are
-synthetic — no real note directory is referenced anywhere in the test suite.
+One deliberate difference: `hashline read start` replaces the pinned tags, while `POST /context/read` adds the reading tag to them. The context strip shows the pinned tags and the pinned work side by side with a clear button each, so starting a read there should not empty the column next to it.
 
-CI runs `ruff check .`, `mypy src` and `pytest --cov` on every push and pull
-request.
-
-## Layout
-
-```
-src/hashline/
-  models.py     dataclasses shared by every layer
-  tags.py       #tag extraction (pure functions)
-  store.py      SQLite repository; no web or CLI dependency
-  importer.py   documents -> note drafts (pure functions; no file I/O)
-  bib.py        BibTeX parsing (pure functions; no file I/O)
-  outline.py    Markdown outline building and rendering (pure functions)
-  cli.py        Typer adapter; owns all filesystem I/O
-  schema.sql    tables, indexes, FTS5 index and its sync triggers
-  web/app.py       FastAPI + HTMX adapter
-  ml/search.py     ranking maths for semantic search (pure numpy)
-  ml/embed.py      embedding backend behind the optional `ml` extra
-  ml/protocols.py  the Embedder protocol; numpy and nothing else
-tests/
-```
-
-The core (`models`, `tags`, `store`, `importer`, `bib`, `outline`) is plain Python
-over the standard library plus numpy. The CLI and the web UI are thin adapters over it.
+> **Security Note:** The `path` field in both `/import` and `/bib/import` reads files directly from the local filesystem on the machine running the server. Do not expose this web app to a network. All state-changing routes also reject a POST whose `Origin` header does not match the server's own host, so a form on another site left open in the same browser cannot delete notes or replace the bibliography; a request with no `Origin` header (curl, the CLI) is still allowed through.
 
 ## Semantic search
 
@@ -327,6 +277,62 @@ takes 86 ms against 38 ms for the whole CLI, and `hashline add` should not pay
 that.
 
 Not yet in the web UI — `--semantic` is CLI-only for now.
+
+## Upgrading
+
+This release carries the project's first schema migrations. An existing database is upgraded in place the next time it is opened, and going back to an older version of `hashline` afterwards will not work.
+
+Before upgrading, it is recommended to copy your database file to back it up. The database location is specified by `$HASHLINE_DB`, or defaults to `~/.local/share/hashline/hashline.db`:
+
+```bash
+cp "${HASHLINE_DB:-$HOME/.local/share/hashline/hashline.db}" ~/hashline.db.bak
+```
+
+## Development
+
+```bash
+uv sync --dev          # dev tools; note this does NOT install the ml extra
+uv run ruff check .
+uv run mypy src
+uv run pytest
+```
+
+### Tests
+
+```bash
+uv run pytest                                     # the default suite
+uv run pytest --cov=src --cov-report=term-missing # with coverage
+uv run pytest -m slow                             # model-dependent tests only
+```
+
+Tests marked `slow` need an embedding model downloaded and are excluded by
+default; CI never runs them. Import fixtures under `tests/fixtures/` are
+synthetic — no real note directory is referenced anywhere in the test suite.
+
+CI runs `ruff check .`, `mypy src` and `pytest --cov` on every push and pull
+request.
+
+## Layout
+
+```
+src/hashline/
+  models.py     dataclasses shared by every layer
+  tags.py       #tag extraction (pure functions)
+  store.py      SQLite repository; no web or CLI dependency
+  importer.py   documents -> note drafts (pure functions; no file I/O)
+  bib.py        BibTeX parsing (pure functions; no file I/O)
+  outline.py    Markdown outline building and rendering (pure functions)
+  cli.py        Typer adapter; owns all filesystem I/O
+  schema.sql    tables, indexes, FTS5 index and its sync triggers
+  web/app.py       FastAPI + HTMX adapter
+  ml/search.py     ranking maths for semantic search (pure numpy)
+  ml/embed.py      embedding backend behind the optional `ml` extra
+  ml/protocols.py  the Embedder protocol; numpy and nothing else
+tests/
+```
+
+The core (`models`, `tags`, `store`, `importer`, `bib`, `outline`) is plain Python
+over the standard library plus numpy. The CLI and the web UI are thin adapters over it.
 
 ## License
 
