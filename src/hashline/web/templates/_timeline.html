@@ -1,0 +1,13 @@
+<section id="timeline">
+  {% for note, tag_names in notes %}
+    <article class="note">
+      <p>{{ note.body }}</p>
+      <div class="meta">
+        {{ note.created_at.strftime('%Y-%m-%d %H:%M') }}
+        {% if tag_names %} · {{ tag_names | join(', ') }}{% endif %}
+      </div>
+    </article>
+  {% else %}
+    <p class="empty">{% if q %}no matches{% else %}no notes yet{% endif %}</p>
+  {% endfor %}
+</section>

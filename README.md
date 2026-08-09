@@ -47,6 +47,17 @@ uv run hashline import ~/notes --mode heading --tag imported
 Every command takes `--db PATH`. Without it the database is `$HASHLINE_DB`,
 and failing that `~/.local/share/hashline/hashline.db`.
 
+## Web UI
+
+```bash
+uv run uvicorn hashline.web.app:app --reload
+# http://127.0.0.1:8000
+```
+
+Capture, tag filtering and search-as-you-type over the same database the CLI
+uses; it honours `$HASHLINE_DB`. HTMX is vendored under
+`src/hashline/web/static/`, so the page needs no CDN and works offline.
+
 ### `import`
 
 ```
@@ -109,21 +120,29 @@ src/hashline/
   importer.py   documents -> note drafts (pure functions; no file I/O)
   cli.py        Typer adapter; owns all filesystem I/O
   schema.sql    tables, indexes, FTS5 index and its sync triggers
+  web/app.py    FastAPI + HTMX adapter
+  ml/search.py  ranking maths for semantic search (pure numpy)
 tests/
 ```
 
 The core (`models`, `tags`, `store`, `importer`) is plain Python over the
-standard library plus numpy. The CLI is a thin adapter over it.
+standard library plus numpy. The CLI and the web UI are thin adapters over it.
 
 ## Roadmap
 
 Semantic search: retrieve notes by meaning, not just keyword, alongside the
-FTS5 index. The `embeddings` table is already in the schema — `(note_id, model)`
-keyed so several models can coexist — so adding it needs no migration and no
-reimport. `sentence-transformers` will be an optional `ml` extra; the app runs
-fully without it, with only semantic search disabled.
+FTS5 index.
 
-A web UI (FastAPI + HTMX) over the same store is planned.
+The groundwork is in place. The `embeddings` table is already in the schema —
+`(note_id, model)` keyed so several models can coexist — so adding it needs no
+migration and no reimport. `hashline.ml.search` holds the ranking maths
+(cosine similarity plus reciprocal rank fusion for blending the keyword and
+semantic rankings); it is pure numpy, imports no model runtime, and is covered
+by the default test suite.
+
+What is left is the embedding backend. `sentence-transformers` will be an
+optional `ml` extra imported inside functions, so the app keeps running fully
+without it, with only semantic search disabled.
 
 ## License
 
