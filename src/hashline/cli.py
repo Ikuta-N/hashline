@@ -15,6 +15,7 @@ import typer
 from hashline.bib import parse_bibtex
 from hashline.importer import Document, parse_documents
 from hashline.models import BibEntry, Context, Note
+from hashline.outline import build_tree, render_markdown
 from hashline.store import NoteHasReplies, Store, default_db_path
 from hashline.tags import normalize_tag
 
@@ -34,6 +35,7 @@ class Mode(StrEnum):
 
     line = "line"
     heading = "heading"
+    outline = "outline"
 
 
 app = typer.Typer(
@@ -72,9 +74,7 @@ def add(
     ] = None,
     no_context: Annotated[
         bool,
-        typer.Option(
-            "--no-context", help="Ignore the pinned context for this note."
-        ),
+        typer.Option("--no-context", help="Ignore the pinned context for this note."),
     ] = False,
 ) -> None:
     """Store one note.
@@ -94,8 +94,7 @@ def add(
             else:
                 if page is not None and store.get_context().citekey is None:
                     raise typer.BadParameter(
-                        "--page requires a pinned citekey; "
-                        "see `hashline read start`"
+                        "--page requires a pinned citekey; see `hashline read start`"
                     )
                 note = store.add_note_with_context(
                     text, page=page, extra_tags=tag or ()
@@ -148,9 +147,7 @@ def reply(
                 raise typer.BadParameter(
                     "--page requires a pinned citekey; see `hashline read start`"
                 )
-            note = store.add_note_with_context(
-                text, page=page, parent_id=parent_id
-            )
+            note = store.add_note_with_context(text, page=page, parent_id=parent_id)
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
         typer.echo(_format_note(note, store.tags_for_note(note.id)))
@@ -231,6 +228,45 @@ def search(
             note = hit.note
             body = _format_note(note, store.tags_for_note(note.id))
             typer.echo(f"{hit.score:6.2f}  {body}")
+
+
+@app.command()
+def export(
+    ctx: typer.Context,
+    tag: Annotated[
+        str | None, typer.Option("--tag", "-t", help="Only this tag.")
+    ] = None,
+    citekey: Annotated[
+        str | None, typer.Option("--citekey", "-c", help="Only this citekey.")
+    ] = None,
+    root: Annotated[
+        int | None, typer.Option("--root", help="Only this thread root.")
+    ] = None,
+    out: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write to this file instead of stdout."),
+    ] = None,
+) -> None:
+    """Export notes as a Markdown outline."""
+    if root is not None and (tag is not None or citekey is not None):
+        raise typer.BadParameter("--root cannot be combined with --tag or --citekey")
+
+    with _open(ctx) as store:
+        if root is not None:
+            try:
+                notes = store.thread(root)
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+        else:
+            notes = store.list_notes(tag=tag, citekey=citekey, limit=-1)
+
+    roots = build_tree(notes)
+    markdown = render_markdown(roots)
+
+    if out is not None:
+        out.write_text(markdown, encoding="utf-8")
+    else:
+        typer.echo(markdown, nl=False)
 
 
 @app.command()
@@ -348,9 +384,7 @@ def pin(
     show: Annotated[
         bool, typer.Option("--show", help="Show the pinned context.")
     ] = False,
-    clear: Annotated[
-        bool, typer.Option("--clear", help="Unpin the context.")
-    ] = False,
+    clear: Annotated[bool, typer.Option("--clear", help="Unpin the context.")] = False,
 ) -> None:
     """Pin a tag context that add_note_with_context applies to new notes.
 
@@ -380,9 +414,7 @@ app.add_typer(read_app, name="read")
 @read_app.command("start")
 def read_start(
     ctx: typer.Context,
-    citekey: Annotated[
-        str, typer.Argument(help="A citekey from `hashline bib list`.")
-    ],
+    citekey: Annotated[str, typer.Argument(help="A citekey from `hashline bib list`.")],
     tag: Annotated[
         str,
         typer.Option("--tag", "-t", help="Extra tag pinned alongside the citekey."),

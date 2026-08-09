@@ -91,7 +91,7 @@ class TestList:
         # Extract the note ID from the output string "    1  2026-08-09 ... parent note"
         parent_id = output.split()[0]
         run(db, "reply", parent_id, "child note")
-        
+
         timeline = run(db, "list", "--roots-only")
         assert "parent note" in timeline
         assert "child note" not in timeline
@@ -166,9 +166,7 @@ class TestImport:
         assert "no notes yet" in run(db, "list")
 
     def test_missing_path_fails(self, db: Path, tmp_path: Path) -> None:
-        result = runner.invoke(
-            app, ["--db", str(db), "import", str(tmp_path / "nope")]
-        )
+        result = runner.invoke(app, ["--db", str(db), "import", str(tmp_path / "nope")])
         assert result.exit_code != 0
 
     def test_unusable_tag_fails(self, db: Path, notes_dir: Path) -> None:
@@ -274,8 +272,6 @@ class TestRead:
         run(db, "read", "stop")
         assert "nothing pinned" in run(db, "read", "status")
 
-
-
     def test_start_with_an_unknown_citekey_fails(self, db: Path) -> None:
         result = runner.invoke(app, ["--db", str(db), "read", "start", "nope"])
         assert result.exit_code != 0
@@ -314,9 +310,7 @@ class TestRead:
 
 
 class TestCollectDocuments:
-    def test_reads_an_explicit_file_whatever_its_suffix(
-        self, notes_dir: Path
-    ) -> None:
+    def test_reads_an_explicit_file_whatever_its_suffix(self, notes_dir: Path) -> None:
         documents, skipped = collect_documents([notes_dir / "ignored.json"])
         assert len(documents) == 1
         assert skipped == []
@@ -412,3 +406,54 @@ class TestRm:
 
         out = run(db, "rm", parent_id, "--yes", "--recursive")
         assert "deleted 2 notes" in out
+
+
+class TestExport:
+    def test_exports_everything(self, db: Path) -> None:
+        run(db, "add", "parent")
+        run(db, "add", "sibling")
+        output = run(db, "export")
+        assert "- parent" in output
+        assert "- sibling" in output
+
+    def test_orphan_promoted_to_root(self, db: Path) -> None:
+        out = run(db, "add", "parent")
+        parent_id = out.split()[0]
+        run(db, "reply", parent_id, "child #target")
+
+        output = run(db, "export", "--tag", "target")
+        assert "- child" in output
+        assert "- parent" not in output
+
+    def test_root_filter(self, db: Path) -> None:
+        p_out = run(db, "add", "parent")
+        parent_id = p_out.split()[0]
+        run(db, "reply", parent_id, "child")
+        run(db, "add", "other")
+
+        output = run(db, "export", "--root", parent_id)
+        assert "- parent" in output
+        assert "  - child" in output
+        assert "other" not in output
+
+    def test_writes_to_file(self, db: Path, tmp_path: Path) -> None:
+        run(db, "add", "content")
+        out_file = tmp_path / "out.md"
+        run(db, "export", "-o", str(out_file))
+        assert "- content" in out_file.read_text(encoding="utf-8")
+
+    def test_conflicting_options_fail(self, db: Path) -> None:
+        result = runner.invoke(
+            app, ["--db", str(db), "export", "--root", "1", "--tag", "foo"]
+        )
+        assert result.exit_code != 0
+        assert "cannot be combined" in result.output
+
+    def test_import_outline_then_export(self, db: Path, tmp_path: Path) -> None:
+        plan = tmp_path / "plan.md"
+        plan.write_text("- parent\n  - child\n", encoding="utf-8")
+
+        run(db, "import", str(plan), "--mode", "outline")
+
+        output = run(db, "export")
+        assert "- parent\n  - child\n" in output
