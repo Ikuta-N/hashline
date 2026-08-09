@@ -6,6 +6,7 @@ import FastAPI, Typer, or anything else from an adapter layer.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -14,7 +15,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Final
 
-from hashline.models import BibEntry, Note, NoteDraft, SearchHit, TagCount
+from hashline.models import BibEntry, Context, Note, NoteDraft, SearchHit, TagCount
 from hashline.tags import extract_tags, normalize_tag
 
 SCHEMA_VERSION: Final = 2
@@ -68,6 +69,9 @@ def default_db_path() -> Path:
 #: The trigram tokenizer indexes three-character sequences, so it cannot match
 #: anything shorter than that.
 _MIN_TRIGRAM_QUERY: Final = 3
+
+#: The app_state row the pinned Context is stored under, as one JSON blob.
+_CONTEXT_KEY: Final = "context"
 
 
 def _as_phrase(text: str) -> str:
@@ -572,3 +576,76 @@ class Store:
             )
             for row in rows
         ]
+
+    # --- context -----------------------------------------------------------
+
+    def get_context(self) -> Context:
+        """Return the pinned context, or an empty ``Context`` when none is set."""
+        row = self._conn.execute(
+            "SELECT value FROM app_state WHERE key = ?", (_CONTEXT_KEY,)
+        ).fetchone()
+        if row is None:
+            return Context()
+        data = json.loads(row["value"])
+        return Context(tags=tuple(data["tags"]), citekey=data["citekey"])
+
+    def set_context(self, context: Context) -> None:
+        """Persist ``context`` as the pinned context, replacing any previous one.
+
+        Tags are normalized on the way in through ``tags.normalize_tag``, so a
+        tag that could never be a valid ``#tag`` fails here -- where the user
+        typed it -- rather than later, silently, when a note tries to use it.
+        """
+        payload = json.dumps(
+            {
+                "tags": [normalize_tag(tag) for tag in context.tags],
+                "citekey": context.citekey,
+            }
+        )
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO app_state (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (_CONTEXT_KEY, payload),
+            )
+
+    def clear_context(self) -> None:
+        """Unpin the context, if one is set."""
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM app_state WHERE key = ?", (_CONTEXT_KEY,)
+            )
+
+    def add_note_with_context(
+        self,
+        body: str,
+        *,
+        page: str | None = None,
+        extra_tags: Sequence[str] = (),
+    ) -> Note:
+        """Store one note under the pinned context.
+
+        Composes the tag list from three sources: the body's own inline
+        ``#tags`` (``add_note`` -> ``_insert`` already handles those), the
+        pinned context's tags, and, when the context has a citekey, that
+        entry's ``bib_entries.tag`` -- so a note written while "reading" a
+        work is tagged with that work automatically. ``page`` and the
+        citekey come from the context too.
+
+        ``add_note`` itself deliberately never reads the context. Keeping
+        implicit state out of the repository's core write path means every
+        other caller -- ``add_notes``, the importer -- stays predictable and
+        testable without a context to set up first. This method is the one
+        place the composition happens, and both the CLI and the web adapter
+        call it so pinning behaves the same from either.
+        """
+        context = self.get_context()
+        tags = list(context.tags)
+        tags.extend(extra_tags)
+        if context.citekey is not None:
+            entry = self.get_bib_entry(context.citekey)
+            if entry is not None:
+                tags.append(entry.tag)
+        return self.add_note(
+            body, page=page, citekey=context.citekey, extra_tags=tags
+        )

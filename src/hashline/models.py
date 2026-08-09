@@ -81,3 +81,19 @@ class BibEntry:
     year: str | None = None
     doi: str | None = None
     raw: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Context:
+    """A pinned tag/citekey context applied to new notes.
+
+    Empty by default. See ``Store.add_note_with_context`` for how this
+    composes with a note's own inline ``#tags``.
+    """
+
+    tags: tuple[str, ...] = ()
+    citekey: str | None = None
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.tags and self.citekey is None
