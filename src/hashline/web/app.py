@@ -517,34 +517,36 @@ def import_notes(
     dry_run: bool = Form(False),
 ) -> HTMLResponse:
     documents = []
-    skipped = []
+    skipped: list[str] = []
+
+    def import_page(**extra: Any) -> HTMLResponse:
+        """The import page, always carrying what has been skipped so far.
+
+        Refusing the submission is no reason to swallow the per-file
+        report: a user told only "unknown import mode" would never learn
+        that one of the files they attached could not be read either.
+        """
+        return templates.TemplateResponse(
+            request=request,
+            name="import.html",
+            context={
+                "current_page": "import",
+                "total": store.count_notes(),
+                "skipped": skipped,
+                **extra,
+            },
+        )
 
     if path:
         p = Path(path)
         if not p.exists():
-            return templates.TemplateResponse(
-                request=request,
-                name="import.html",
-                context={
-                    "current_page": "import",
-                    "total": store.count_notes(),
-                    "error": f"no such file or directory: {path}",
-                },
-            )
+            return import_page(error=f"no such file or directory: {path}")
         try:
             docs, skps = read_documents([p])
             documents.extend(docs)
             skipped.extend(skps)
         except FileNotFoundError as exc:
-            return templates.TemplateResponse(
-                request=request,
-                name="import.html",
-                context={
-                    "current_page": "import",
-                    "total": store.count_notes(),
-                    "error": str(exc),
-                },
-            )
+            return import_page(error=str(exc))
 
     upload_items = [(f.filename, f.file.read()) for f in files if f.filename]
     if upload_items:
@@ -553,15 +555,7 @@ def import_notes(
         skipped.extend(skps)
 
     if not documents and not path and not upload_items:
-        return templates.TemplateResponse(
-            request=request,
-            name="import.html",
-            context={
-                "current_page": "import",
-                "total": store.count_notes(),
-                "error": "Please provide a path or upload files.",
-            },
-        )
+        return import_page(error="Please provide a path or upload files.")
 
     tag_list = tags.split() if tags else []
     try:
@@ -573,15 +567,7 @@ def import_notes(
             common_tags=tag_list,
         )
     except ValueError as exc:
-        return templates.TemplateResponse(
-            request=request,
-            name="import.html",
-            context={
-                "current_page": "import",
-                "total": store.count_notes(),
-                "error": str(exc),
-            },
-        )
+        return import_page(error=str(exc))
 
     if dry_run:
         notice = f"would import {len(drafts)} notes from {len(documents)} files"
@@ -589,16 +575,7 @@ def import_notes(
         stored = store.add_notes(drafts)
         notice = f"imported {len(stored)} notes from {len(documents)} files"
 
-    return templates.TemplateResponse(
-        request=request,
-        name="import.html",
-        context={
-            "current_page": "import",
-            "total": store.count_notes(),
-            "notice": notice,
-            "skipped": skipped,
-        },
-    )
+    return import_page(notice=notice)
 
 
 @app.post("/bib/import", response_class=HTMLResponse)
