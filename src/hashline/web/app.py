@@ -79,9 +79,13 @@ def create_note(
 ) -> HTMLResponse:
     """Capture a note, then hand back the refreshed timeline."""
     try:
-        store.add_note(body)
-    except ValueError:
-        pass  # an empty submission just re-renders the timeline
+        store.add_note_with_context(body)
+    except ValueError as exc:
+        if str(exc) == "note body must not be blank":
+            pass  # an empty submission just re-renders the timeline
+        else:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     return templates.TemplateResponse(
         request=request,
         name="_timeline.html",

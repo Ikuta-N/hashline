@@ -86,6 +86,28 @@ class TestCreateNote:
         assert response.status_code == 200
         assert "no notes yet" in client.get("/").text
 
+    def test_applies_pinned_context(self, client: TestClient, tmp_path: Path) -> None:
+        from hashline.models import Context
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.set_context(Context(tags=("reading",)))
+        
+        response = client.post("/notes", data={"body": "a note"})
+        assert response.status_code == 200
+        # The returned HTML should show the 'reading' tag
+        assert "reading" in response.text
+
+    def test_fails_400_when_pinned_work_is_missing(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        from hashline.models import Context
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.set_context(Context(citekey="smith2020"))
+            # We explicitly do NOT insert smith2020 into bib_entries
+        
+        response = client.post("/notes", data={"body": "a note"})
+        assert response.status_code == 400
+        assert "is no longer in the bibliography" in response.json()["detail"]
+
 
 class TestStatic:
     def test_htmx_is_served_locally(self, client: TestClient) -> None:

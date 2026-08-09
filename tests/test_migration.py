@@ -1,6 +1,7 @@
 """Tests for schema migration."""
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -79,9 +80,9 @@ def _build_v1_db(conn: sqlite3.Connection) -> None:
 
 class TestMigration:
     def test_v1_database_gains_new_columns(
-        self, tmp_path: pytest.TempPathFactory
+        self, tmp_path: Path
     ) -> None:
-        db = tmp_path / "test.db"  # type: ignore[union-attr]
+        db = tmp_path / "test.db"
         conn = sqlite3.connect(db)
         _build_v1_db(conn)
         conn.close()
@@ -96,9 +97,9 @@ class TestMigration:
             assert "parent_id" in cols
 
     def test_pre_existing_note_survives_migration(
-        self, tmp_path: pytest.TempPathFactory
+        self, tmp_path: Path
     ) -> None:
-        db = tmp_path / "test.db"  # type: ignore[union-attr]
+        db = tmp_path / "test.db"
         conn = sqlite3.connect(db)
         _build_v1_db(conn)
         conn.close()
@@ -109,9 +110,9 @@ class TestMigration:
             assert notes[0].body == "hello #test"
 
     def test_pre_existing_note_is_still_searchable(
-        self, tmp_path: pytest.TempPathFactory
+        self, tmp_path: Path
     ) -> None:
-        db = tmp_path / "test.db"  # type: ignore[union-attr]
+        db = tmp_path / "test.db"
         conn = sqlite3.connect(db)
         _build_v1_db(conn)
         conn.close()
@@ -120,8 +121,8 @@ class TestMigration:
             hits = store.search_notes("hello")
             assert len(hits) == 1
 
-    def test_user_version_is_updated(self, tmp_path: pytest.TempPathFactory) -> None:
-        db = tmp_path / "test.db"  # type: ignore[union-attr]
+    def test_user_version_is_updated(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
         conn = sqlite3.connect(db)
         _build_v1_db(conn)
         conn.close()
@@ -131,9 +132,9 @@ class TestMigration:
             assert version == SCHEMA_VERSION
 
     def test_reopening_after_migration_is_idempotent(
-        self, tmp_path: pytest.TempPathFactory
+        self, tmp_path: Path
     ) -> None:
-        db = tmp_path / "test.db"  # type: ignore[union-attr]
+        db = tmp_path / "test.db"
         conn = sqlite3.connect(db)
         _build_v1_db(conn)
         conn.close()
@@ -148,9 +149,9 @@ class TestMigration:
             assert version == SCHEMA_VERSION
 
     def test_future_version_raises_schema_version_error(
-        self, tmp_path: pytest.TempPathFactory
+        self, tmp_path: Path
     ) -> None:
-        db = tmp_path / "test.db"  # type: ignore[union-attr]
+        db = tmp_path / "test.db"
         conn = sqlite3.connect(db)
         conn.execute("PRAGMA foreign_keys = ON")
         conn.executescript(_V1_DDL)
@@ -172,9 +173,9 @@ class TestMigration:
             assert "parent_id" in cols
 
     def test_interrupted_migration_is_recoverable(
-        self, tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        db = tmp_path / "test.db"  # type: ignore[union-attr]
+        db = tmp_path / "test.db"
         conn = sqlite3.connect(db)
         _build_v1_db(conn)
         conn.close()
