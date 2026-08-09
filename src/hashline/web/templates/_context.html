@@ -3,35 +3,47 @@
     <div class="error" style="margin-bottom: .75rem;">{{ error }}</div>
   {% endif %}
   
-  {% if pinned_citekey or pinned_tags %}
-    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-      <div>
-        {% if pinned_citekey %}
-          <div style="margin-bottom: .25rem;">
-            <strong>{{ pinned_citekey }}</strong> {{ pinned_title }}
-          </div>
-        {% endif %}
-        {% if pinned_tags %}
-          <div style="color: var(--muted); font-size: .85rem;">
-            tags: {{ pinned_tags | join(', ') }}
-          </div>
-        {% endif %}
-      </div>
-      <form hx-post="/context/clear" hx-target="#context-strip" hx-swap="outerHTML" style="margin: 0;">
-        <button type="submit" style="padding: .4rem .75rem; font-size: .85rem; background: var(--bg); color: var(--fg); border: 1px solid var(--line);">clear</button>
-      </form>
+  <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
+    <!-- Works column -->
+    <div style="flex: 1; display: flex; flex-direction: column; gap: 0.5rem;">
+      {% if pinned_citekey %}
+        <div style="margin-bottom: .25rem; display: flex; align-items: center; gap: 0.5rem;">
+          <div><strong>{{ pinned_citekey }}</strong> {{ pinned_title }}</div>
+          <form hx-post="/context/clear_read" hx-target="#context-strip" hx-swap="outerHTML" style="margin: 0;">
+            <button type="submit" style="padding: .2rem .4rem; font-size: .75rem;">clear</button>
+          </form>
+        </div>
+      {% endif %}
+      {% if not pinned_citekey and not pinned_tags %}
+        <form hx-post="/context/read" hx-target="#context-strip" hx-swap="outerHTML" style="display: flex; gap: .5rem; margin: 0;">
+          <input type="text" name="citekey" placeholder="citekey to read" required style="padding: .4rem .75rem; font-size: .85rem;">
+          <input type="text" name="tag" placeholder="tag (default: reading)" style="padding: .4rem .75rem; font-size: .85rem; width: 10rem;">
+          <button type="submit" style="padding: .4rem .75rem; font-size: .85rem;">read</button>
+        </form>
+      {% endif %}
     </div>
-  {% else %}
-    <div style="display: flex; gap: 1rem; align-items: center;">
-      <form hx-post="/context/pin" hx-target="#context-strip" hx-swap="outerHTML" style="display: flex; gap: .5rem; flex: 1; margin: 0;">
-        <input type="text" name="tag" placeholder="pin #tags" style="padding: .4rem .75rem; font-size: .85rem;">
+
+    <!-- Tags column -->
+    <div style="flex: 1;">
+      {% if pinned_tags %}
+        <div style="color: var(--muted); font-size: .85rem; margin-bottom: 0.5rem;">
+          tags: {{ pinned_tags | join(', ') }}
+        </div>
+      {% endif %}
+      <form hx-post="/context/pin" hx-target="#context-strip" hx-swap="outerHTML" style="display: flex; gap: .5rem; margin: 0; align-items: center;">
+        <input type="text" name="tag" value="{{ pinned_tags | join(' ') if pinned_tags else '' }}" placeholder="pin #tags" style="padding: .4rem .75rem; font-size: .85rem; flex: 1;">
         <button type="submit" style="padding: .4rem .75rem; font-size: .85rem;">pin</button>
-      </form>
-      <form hx-post="/context/read" hx-target="#context-strip" hx-swap="outerHTML" style="display: flex; gap: .5rem; flex: 1; margin: 0;">
-        <input type="text" name="citekey" placeholder="citekey to read" required style="padding: .4rem .75rem; font-size: .85rem;">
-        <input type="text" name="tag" placeholder="tag (default: reading)" style="padding: .4rem .75rem; font-size: .85rem; width: 10rem;">
-        <button type="submit" style="padding: .4rem .75rem; font-size: .85rem;">read</button>
+        {% if pinned_tags %}
+        <button type="button" hx-post="/context/clear_tags" hx-target="#context-strip" hx-swap="outerHTML" style="padding: .4rem .75rem; font-size: .85rem; background: var(--bg); color: var(--fg); border: 1px solid var(--line);">clear</button>
+        {% endif %}
       </form>
     </div>
-  {% endif %}
+
+    <!-- clear all -->
+    {% if pinned_citekey or pinned_tags %}
+    <form hx-post="/context/clear" hx-target="#context-strip" hx-swap="outerHTML" style="margin: 0;">
+      <button type="submit" style="padding: .4rem .75rem; font-size: .85rem; background: var(--bg); color: var(--fg); border: 1px solid var(--line);">clear all</button>
+    </form>
+    {% endif %}
+  </div>
 </div>

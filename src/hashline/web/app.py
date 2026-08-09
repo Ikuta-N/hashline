@@ -367,6 +367,26 @@ def clear_context(request: Request, store: StoreDep) -> HTMLResponse:
     )
 
 
+@app.post("/context/clear_tags", response_class=HTMLResponse)
+def clear_tags(request: Request, store: StoreDep) -> HTMLResponse:
+    """Clear pinned tags and preserve the citekey."""
+    current = store.get_context()
+    store.set_context(Context(tags=(), citekey=current.citekey))
+    return templates.TemplateResponse(
+        request=request, name="_context.html", context=_context_data(store)
+    )
+
+
+@app.post("/context/clear_read", response_class=HTMLResponse)
+def clear_read(request: Request, store: StoreDep) -> HTMLResponse:
+    """Clear pinned citekey and preserve the tags."""
+    current = store.get_context()
+    store.set_context(Context(tags=current.tags, citekey=None))
+    return templates.TemplateResponse(
+        request=request, name="_context.html", context=_context_data(store)
+    )
+
+
 @app.get("/bib", response_class=HTMLResponse)
 def bib(request: Request, store: StoreDep) -> HTMLResponse:
     """Bibliography management."""
