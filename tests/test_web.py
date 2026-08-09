@@ -607,11 +607,19 @@ class TestContext:
         assert 'name="tag"' in response.text
         assert 'name="citekey"' in response.text
 
-    def test_pin_tags(self, client: TestClient) -> None:
+    def test_pin_tags(self, client: TestClient, tmp_path: Path) -> None:
         response = client.post("/context/pin", data={"tag": "research urgent"})
         assert response.status_code == 200
         assert "research, urgent" in response.text
-        assert 'name="citekey"' not in response.text
+
+        # Pinning tags must not pin a work. This used to be checked by asserting
+        # the citekey input was absent from the markup, which quietly required
+        # the read form to disappear the moment any tag was pinned -- the bug
+        # test_context_still_offers_the_read_form_with_only_tags_pinned fixes.
+        with Store.open(tmp_path / "hashline.db") as store:
+            context = store.get_context()
+        assert context.tags == ("research", "urgent")
+        assert context.citekey is None
 
         # Verify it persisted
         assert "research, urgent" in client.get("/context").text
