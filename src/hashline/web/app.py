@@ -339,12 +339,11 @@ def pin_context(
 ) -> HTMLResponse:
     """Set pinned tags and preserve the citekey."""
     error = None
-    if tag.strip():
-        try:
-            current = store.get_context()
-            store.set_context(Context(tags=tuple(tag.split()), citekey=current.citekey))
-        except ValueError as exc:
-            error = str(exc)
+    try:
+        current = store.get_context()
+        store.set_context(Context(tags=tuple(tag.split()), citekey=current.citekey))
+    except ValueError as exc:
+        error = str(exc)
     return templates.TemplateResponse(
         request=request, name="_context.html", context=_context_data(store, error=error)
     )
@@ -555,7 +554,7 @@ def bib_import(
     replace: bool = Form(False),
 ) -> HTMLResponse:
     text = ""
-    source_name = ""
+    source_names = []
 
     if path:
         p = Path(path)
@@ -570,8 +569,8 @@ def bib_import(
                 },
             )
         try:
-            text = p.read_text(encoding="utf-8")
-            source_name = str(p)
+            text += p.read_text(encoding="utf-8") + "\n"
+            source_names.append(str(p))
         except OSError as exc:
             return templates.TemplateResponse(
                 request=request,
@@ -582,11 +581,11 @@ def bib_import(
                     "error": f"could not read {path}: {exc}",
                 },
             )
-    elif file and file.filename:
+    if file and file.filename:
         try:
             content = file.file.read()
-            text = content.decode("utf-8")
-            source_name = file.filename
+            text += content.decode("utf-8") + "\n"
+            source_names.append(file.filename)
         except UnicodeDecodeError as exc:
             return templates.TemplateResponse(
                 request=request,
@@ -597,7 +596,8 @@ def bib_import(
                     "error": f"could not decode {file.filename}: {exc}",
                 },
             )
-    else:
+    
+    if not source_names:
         return templates.TemplateResponse(
             request=request,
             name="import.html",
@@ -607,6 +607,8 @@ def bib_import(
                 "error": "Please provide a path or upload a .bib file.",
             },
         )
+
+    source_name = " and ".join(source_names)
 
     entries, problems = parse_bibtex(text)
 
@@ -753,7 +755,18 @@ def export_download(
         roots = build_tree(notes)
         markdown = render_markdown(roots)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return templates.TemplateResponse(
+            request=request,
+            name="export.html",
+            context={
+                "current_page": "export",
+                "total": store.count_notes(),
+                "tag": tag,
+                "citekey": citekey,
+                "root": root,
+                "error": str(exc),
+            },
+        )
 
     return Response(
         content=markdown,
