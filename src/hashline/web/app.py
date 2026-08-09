@@ -77,19 +77,30 @@ def create_note(
     body: Annotated[str, Form()],
     tag: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
-    """Capture a note, then hand back the refreshed timeline."""
-    try:
-        store.add_note_with_context(body)
-    except ValueError as exc:
-        if str(exc) == "note body must not be blank":
-            pass  # an empty submission just re-renders the timeline
-        else:
-            from fastapi import HTTPException
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    """Capture a note, then hand back the refreshed timeline.
+
+    Always answers 200 with the timeline. A 4xx would leave HTMX with nothing to
+    swap, so the user would click add and see the page sit there; a rejected
+    note has to come back as something they can read.
+    """
+    error: str | None = None
+    if body.strip():
+        # A blank submission is a no-op, not a mistake worth reporting. Anything
+        # else the store refuses -- a pinned work that has left the library, say
+        # -- is the user's to see.
+        try:
+            store.add_note_with_context(body)
+        except ValueError as exc:
+            error = str(exc)
     return templates.TemplateResponse(
         request=request,
         name="_timeline.html",
-        context={"notes": _timeline(store, q="", tag=tag), "q": "", "tag": tag},
+        context={
+            "notes": _timeline(store, q="", tag=tag),
+            "q": "",
+            "tag": tag,
+            "error": error,
+        },
     )
 
 

@@ -1,4 +1,5 @@
 <section id="timeline">
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
   {% for note, tag_names in notes %}
     <article class="note">
       <p>{{ note.body }}</p>
