@@ -19,6 +19,7 @@ from hashline.ml.embed import (
     unpack_matrix,
     unpack_vector,
 )
+from hashline.ml.protocols import Embedder
 from hashline.ml.search import rank_by_similarity
 
 
@@ -141,6 +142,21 @@ class TestEmbedTexts:
         assert result.shape == (2, 2)
         assert result.dtype == np.float32
         assert result[1][0] == 4.0
+
+    def test_an_embedder_needs_nothing_beyond_the_protocol(self) -> None:
+        """The one method in Embedder is the whole contract.
+
+        embed_texts used to pass convert_to_numpy=True, so anything standing
+        in for a model had to accept sentence-transformers' keyword arguments
+        as well. That option now lives in the adapter load_model returns.
+        """
+
+        class MinimalEmbedder:
+            def encode(self, texts: list[str]) -> np.ndarray:
+                return np.array([[float(len(text))] for text in texts])
+
+        embedder: Embedder = MinimalEmbedder()
+        assert embed_texts(["abc"], model=embedder)[0][0] == 3.0
 
 
 @pytest.mark.slow

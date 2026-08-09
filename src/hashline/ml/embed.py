@@ -15,6 +15,8 @@ from typing import Any, Final
 import numpy as np
 from numpy.typing import NDArray
 
+from hashline.ml.protocols import Embedder
+
 #: Small, multilingual-tolerant and quick to download. Overridable per call.
 DEFAULT_MODEL: Final = "sentence-transformers/all-MiniLM-L6-v2"
 
@@ -50,7 +52,22 @@ def is_available() -> bool:
     return importlib.util.find_spec("sentence_transformers") is not None
 
 
-def load_model(name: str = DEFAULT_MODEL) -> Any:
+class _SentenceTransformerEmbedder:
+    """Adapts a sentence-transformers model to :class:`Embedder`.
+
+    The backend's keyword arguments stop here rather than leaking into the
+    protocol, so callers -- and test fakes -- only ever see ``encode(texts)``.
+    """
+
+    def __init__(self, model: Any) -> None:
+        self._model = model
+
+    def encode(self, texts: list[str]) -> NDArray[np.floating]:
+        encoded = self._model.encode(texts, convert_to_numpy=True)
+        return np.asarray(encoded, dtype=_DTYPE)
+
+
+def load_model(name: str = DEFAULT_MODEL) -> Embedder:
     """Load a sentence-transformers model.
 
     Downloads it on first use, which is why nothing that calls this may run in
@@ -62,13 +79,13 @@ def load_model(name: str = DEFAULT_MODEL) -> Any:
         raise MlExtraNotInstalled(
             "semantic search needs the 'ml' extra: uv sync --extra ml"
         ) from exc
-    return SentenceTransformer(name)
+    return _SentenceTransformerEmbedder(SentenceTransformer(name))
 
 
 def embed_texts(
     texts: Sequence[str],
     *,
-    model: Any | None = None,
+    model: Embedder | None = None,
     model_name: str = DEFAULT_MODEL,
 ) -> NDArray[np.float32]:
     """Embed ``texts`` into one row each.
@@ -79,7 +96,7 @@ def embed_texts(
     if not texts:
         return np.empty((0, 0), dtype=_DTYPE)
     encoder = model if model is not None else load_model(model_name)
-    encoded = encoder.encode(list(texts), convert_to_numpy=True)
+    encoded = encoder.encode(list(texts))
     return np.asarray(encoded, dtype=_DTYPE).reshape(len(texts), -1)
 
 
