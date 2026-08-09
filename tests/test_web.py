@@ -338,6 +338,76 @@ class TestFilters:
         assert 'name="tag" value="sqlite"' in response.text
         assert 'name="q" value="bm25"' in response.text
 
+    def test_index_renders_a_hidden_limit_field(self, client: TestClient) -> None:
+        body = client.get("/", params={"limit": 3}).text
+        assert 'name="limit" value="3"' in body, (
+            "no hidden limit field was rendered, so a search, reply or "
+            "delete triggered from this page will snap the limit back to "
+            "the default of 50"
+        )
+
+    def test_search_reply_and_delete_carry_limit_in_their_hx_include(
+        self, seeded: TestClient
+    ) -> None:
+        body = seeded.get("/", params={"limit": 3}).text
+
+        search_input = re.search(
+            r'<input[^>]*name="q"[^>]*hx-get="/notes"[^>]*>', body
+        )
+        assert search_input is not None, "search input not found"
+        assert "[name='limit']" in search_input.group(0), (
+            "the search input's hx-include does not mention limit, so "
+            "typing a query snaps the timeline back to the default limit"
+        )
+
+        reply_button = re.search(r'<button hx-get="/notes/1/reply"[^>]*>', body)
+        assert reply_button is not None, "reply button not found"
+        assert "[name='limit']" in reply_button.group(0), (
+            "the reply button's hx-include does not mention limit"
+        )
+
+        delete_button = re.search(r'<button hx-post="/notes/1/delete"[^>]*>', body)
+        assert delete_button is not None, "delete button not found"
+        assert "[name='limit']" in delete_button.group(0), (
+            "the delete button's hx-include does not mention limit, so "
+            "deleting a note snaps the timeline back to the default limit"
+        )
+
+    def test_notes_fragment_returns_exactly_limit_notes_when_more_exist(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        # This already passes today: the /notes route reads its own limit
+        # query param directly. It is written here as a regression guard
+        # alongside the hidden-field and hx-include fixes above, which are
+        # what actually get that limit onto the request in the first place.
+        with Store.open(tmp_path / "hashline.db") as store:
+            for i in range(5):
+                store.add_note(f"note {i}")
+        body = client.get("/notes", params={"limit": 3}).text
+        assert len(re.findall(r'class="note"', body)) == 3
+
+    def test_no_filter_name_is_duplicated_as_a_form_field_on_the_index_page(
+        self, client: TestClient
+    ) -> None:
+        # Same invariant as TestHtmxTargets: htmx's hx-include="[name='x']"
+        # is a document-wide CSS selector, not scoped to one <form>. Every
+        # element sharing a filter's name is a candidate value, and form
+        # encoding keeps only the last one -- so two elements named
+        # "roots_only" mean an unchecked checkbox can never win.
+        body = client.get("/").text
+        names = re.findall(r'<(?:input|select|textarea)\b[^>]*\bname="(\w+)"', body)
+        counts: dict[str, int] = {}
+        for name in names:
+            if name in {"q", "tag", "citekey", "roots_only", "limit"}:
+                counts[name] = counts.get(name, 0) + 1
+        duplicates = {name: n for name, n in counts.items() if n > 1}
+        assert not duplicates, (
+            f"filter field name(s) {sorted(duplicates)} are rendered as a "
+            f"form field more than once on '/'; hx-include=\"[name='...']\" "
+            f"matches every one of them and form encoding keeps only the "
+            f"last, so the wrong element's value wins"
+        )
+
 
 class TestCreateNote:
     def test_stores_the_note_and_returns_the_timeline(self, client: TestClient) -> None:
@@ -419,6 +489,33 @@ class TestCreateNote:
         response = client.post("/notes", data={"body": "a note", "tags": "web ui"})
         assert response.status_code == 200
         assert "ui, web" in response.text
+
+    def test_composer_does_not_duplicate_the_search_qs_hidden_field(
+        self, client: TestClient
+    ) -> None:
+        # The composer used to mirror q as its own hidden field, frozen at
+        # page-load time. Typing into the search box after that never
+        # touched the composer's copy, so capturing a note swapped in the
+        # unfiltered timeline. The fix is for the composer to hx-include
+        # the live search input instead of carrying its own q.
+        body = client.get("/").text
+        composer = re.search(
+            r'<form class="composer"\s+hx-post="/notes".*?</form>', body, re.S
+        )
+        assert composer is not None, "composer form not found"
+        markup = composer.group(0)
+        assert 'name="q"' not in markup, (
+            "the composer still renders its own hidden q field frozen at "
+            "page-load time instead of reading the live search box"
+        )
+        assert "hx-include" in markup, (
+            "the composer form has no hx-include, so it cannot pick up "
+            "the live search input's value at submit time"
+        )
+        assert "[name='q']" in markup, (
+            "the composer's hx-include does not reference the search "
+            "input's name"
+        )
 
 
 class TestReply:
@@ -584,6 +681,65 @@ class TestDeleteNote:
         assert "deleted 2 notes" in response.text
         assert "parent" not in response.text
 
+    def test_replies_guard_retry_form_carries_the_active_filters(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="Test",
+                        tag="smith2020",
+                    )
+                ]
+            )
+            store.add_note("parent", citekey="smith2020")
+            store.add_note("child", parent_id=1, citekey="smith2020")
+        response = client.post(
+            "/notes/1/delete",
+            data={"citekey": "smith2020", "roots_only": "true"},
+        )
+        assert response.status_code == 200
+        assert 'name="citekey" value="smith2020"' in response.text, (
+            "the retry form's hidden citekey field is empty; the active "
+            "citekey filter was dropped from the context"
+        )
+        assert 'name="roots_only" value="true"' in response.text, (
+            "the retry form's hidden roots_only field is empty; the active "
+            "roots_only filter was dropped from the context"
+        )
+
+    def test_submitting_the_retry_form_deletes_the_thread_and_keeps_the_citekey_filter(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="Test",
+                        tag="smith2020",
+                    )
+                ]
+            )
+            store.add_note("parent", citekey="smith2020")
+            store.add_note("child", parent_id=1, citekey="smith2020")
+            store.add_note("unrelated")
+        first = client.post("/notes/1/delete", data={"citekey": "smith2020"})
+        fields = _hidden_field_values(first.text)
+        response = client.post("/notes/1/delete", data=fields)
+        assert response.status_code == 200
+        assert "deleted 2 notes" in response.text
+        assert "unrelated" not in response.text, (
+            "the retry form dropped the citekey filter, so an unfiltered "
+            "timeline (including notes outside the citekey) came back"
+        )
+        with Store.open(tmp_path / "hashline.db") as store:
+            assert store.count_notes() == 1
+
 
 class TestStatic:
     def test_htmx_is_served_locally(self, client: TestClient) -> None:
@@ -679,6 +835,34 @@ class TestContext:
 
         # Verify it persisted
         assert "smith2020" in client.get("/context").text
+
+    def test_starting_a_read_keeps_previously_pinned_tags(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        # The tag strip and the pinned work each have their own clear
+        # button, presenting them to the reader as independent. Starting a
+        # read must not silently wipe out tags pinned before it.
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        tag="smith2020",
+                        entry_type="article",
+                        title="Test",
+                    )
+                ]
+            )
+        client.post("/context/pin", data={"tag": "research urgent"})
+        response = client.post("/context/read", data={"citekey": "smith2020"})
+        assert response.status_code == 200
+        with Store.open(tmp_path / "hashline.db") as store:
+            context = store.get_context()
+        assert context.citekey == "smith2020"
+        assert set(context.tags) == {"research", "urgent", "reading"}, (
+            f"expected the reading tag alongside the previously pinned "
+            f"tags, got {context.tags!r}"
+        )
 
     def test_read_start_custom_tag(self, client: TestClient, tmp_path: Path) -> None:
         from hashline.models import BibEntry
@@ -1018,6 +1202,43 @@ class TestImport:
         assert response.status_code == 200
         assert "could not decode" in response.text
 
+    def test_import_bib_path_with_non_utf8_bytes_does_not_500(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        # bib_import's path branch only catches OSError, but
+        # Path.read_text(encoding="utf-8") raises UnicodeDecodeError, a
+        # ValueError subclass, on a non-UTF-8 file -- so it was escaping
+        # uncaught. Use raise_server_exceptions=False so a regression shows
+        # up as the real 500 a browser would see, not a raised exception.
+        bib_file = tmp_path / "library.bib"
+        bib_file.write_bytes(
+            "@article{muller2020, author={Müller, Hans}, "
+            "title={Titel}}".encode("latin-1")
+        )
+        safe_client = TestClient(app, raise_server_exceptions=False)
+        response = safe_client.post("/bib/import", data={"path": str(bib_file)})
+        assert response.status_code == 200
+        assert 'class="error"' in response.text
+        with Store.open(tmp_path / "hashline.db") as store:
+            assert store.list_bib_entries() == []
+
+    def test_import_bib_upload_with_non_utf8_bytes_already_answers_200(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        # The upload branch already catches UnicodeDecodeError -- this is a
+        # regression guard, not a new bug, and it already passes.
+        content = (
+            "@article{muller2020, author={Müller, Hans}, "
+            "title={Titel}}".encode("latin-1")
+        )
+        response = client.post(
+            "/bib/import", files={"file": ("library.bib", content)}
+        )
+        assert response.status_code == 200
+        assert "could not decode" in response.text
+        with Store.open(tmp_path / "hashline.db") as store:
+            assert store.list_bib_entries() == []
+
     def test_bib_import_where_every_entry_fails_to_parse_keeps_the_library(
         self, client: TestClient, tmp_path: Path
     ) -> None:
@@ -1125,6 +1346,54 @@ class TestExport:
             'attachment; filename="export_sqlite.md"'
         )
         assert "bm25" in response.text
+
+    def test_export_download_survives_a_non_ascii_tag(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        # sanitize() is re.sub(r"[^\w\-]", "_", s); Python's \w is
+        # Unicode-aware, so Japanese passes straight through into
+        # Content-Disposition, which Starlette encodes as latin-1.
+        # raise_server_exceptions=False surfaces the real 500 a browser
+        # would see instead of raising inside the test.
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("メモ #日本語")
+        safe_client = TestClient(app, raise_server_exceptions=False)
+        response = safe_client.get("/export/download", params={"tag": "日本語"})
+        assert response.status_code == 200
+        disposition = response.headers["Content-Disposition"]
+        disposition.encode("latin-1")  # must not raise UnicodeEncodeError
+
+    def test_export_download_survives_an_accented_citekey(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="müller2020",
+                        entry_type="article",
+                        title="Titel",
+                        tag="mueller2020",
+                    )
+                ]
+            )
+        safe_client = TestClient(app, raise_server_exceptions=False)
+        response = safe_client.get(
+            "/export/download", params={"citekey": "müller2020"}
+        )
+        assert response.status_code == 200
+        disposition = response.headers["Content-Disposition"]
+        disposition.encode("latin-1")  # must not raise UnicodeEncodeError
+
+    def test_export_download_ascii_tag_still_names_the_file(
+        self, client: TestClient
+    ) -> None:
+        # The non-ASCII fix must not collapse every filename down to a bare
+        # "export_.md" -- an ASCII tag should still be readable in it.
+        response = client.get("/export/download", params={"tag": "sqlite"})
+        assert response.status_code == 200
+        disposition = response.headers["Content-Disposition"]
+        assert "sqlite" in disposition
 
     def test_export_download_root_conflict(self, client: TestClient) -> None:
         response = client.get("/export/download", params={"root": 1, "tag": "test"})
@@ -1288,3 +1557,88 @@ class TestExport:
         )
         assert response.status_code == 200
         assert "kept 1 entries still cited" in response.text
+
+
+class TestCsrf:
+    """State-changing routes must reject a cross-origin form post.
+
+    A plain form POST needs no CORS preflight, so any page open in the
+    browser can submit one to ``127.0.0.1:8000`` -- but browsers always
+    attach an ``Origin`` header to a cross-origin POST. Use
+    ``raise_server_exceptions=False`` so a still-unprotected route shows up
+    as whatever status it actually answers, not a raised exception.
+    """
+
+    def test_delete_rejects_a_cross_origin_post(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("to keep")
+        safe_client = TestClient(app, raise_server_exceptions=False)
+        response = safe_client.post(
+            "/notes/1/delete", headers={"Origin": "https://evil.example"}
+        )
+        assert response.status_code in (400, 403), (
+            f"cross-origin delete was not rejected, got {response.status_code}"
+        )
+        with Store.open(tmp_path / "hashline.db") as store:
+            assert store.count_notes() == 1, (
+                "the note was deleted by a cross-origin request"
+            )
+
+    def test_bib_import_rejects_a_cross_origin_post(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="Test",
+                        tag="smith2020",
+                    )
+                ]
+            )
+        safe_client = TestClient(app, raise_server_exceptions=False)
+        files = {"file": ("other.bib", b"@article{other2023, title={Other}}")}
+        response = safe_client.post(
+            "/bib/import",
+            data={"replace": "true"},
+            files=files,
+            headers={"Origin": "https://evil.example"},
+        )
+        assert response.status_code in (400, 403), (
+            f"cross-origin bib import was not rejected, got "
+            f"{response.status_code}"
+        )
+        with Store.open(tmp_path / "hashline.db") as store:
+            keys = {e.citekey for e in store.list_bib_entries()}
+        assert keys == {"smith2020"}, (
+            "the library was replaced by a cross-origin request"
+        )
+
+    def test_delete_without_an_origin_header_still_works(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        # Every existing test posts with no Origin header at all; the fix
+        # must not break them.
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("to delete")
+        response = client.post("/notes/1/delete")
+        assert response.status_code == 200
+        with Store.open(tmp_path / "hashline.db") as store:
+            assert store.count_notes() == 0
+
+    def test_delete_with_a_same_origin_header_still_works(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        # TestClient's default base_url is http://testserver.
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("to delete")
+        response = client.post(
+            "/notes/1/delete", headers={"Origin": "http://testserver"}
+        )
+        assert response.status_code == 200
+        with Store.open(tmp_path / "hashline.db") as store:
+            assert store.count_notes() == 0
