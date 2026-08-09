@@ -4,7 +4,6 @@ A thin shell over the core: this module owns all filesystem I/O and all
 formatting, and holds no note logic of its own.
 """
 
-import os
 import re
 from collections.abc import Iterable, Iterator, Sequence
 from enum import StrEnum
@@ -15,13 +14,12 @@ import typer
 
 from hashline.importer import Document, parse_documents
 from hashline.models import Note
-from hashline.store import Store
+from hashline.store import Store, default_db_path
 
 #: Suffixes picked up when a directory is imported. An explicitly named file is
 #: read whatever it is called.
 TEXT_SUFFIXES: Final = frozenset({".md", ".markdown", ".txt"})
 
-_DB_ENV_VAR: Final = "HASHLINE_DB"
 _BODY_WIDTH: Final = 90
 _WHITESPACE_RE: Final = re.compile(r"\s+")
 
@@ -38,16 +36,6 @@ app = typer.Typer(
     add_completion=False,
     help="Local-first micro-notes: one line, inline #hashtags, fast retrieval.",
 )
-
-
-def default_db_path() -> Path:
-    """Where notes live unless ``--db`` or ``$HASHLINE_DB`` says otherwise."""
-    override = os.environ.get(_DB_ENV_VAR)
-    if override:
-        return Path(override)
-    data_home = os.environ.get("XDG_DATA_HOME")
-    root = Path(data_home) if data_home else Path.home() / ".local" / "share"
-    return root / "hashline" / "hashline.db"
 
 
 @app.callback()

@@ -6,6 +6,7 @@ import FastAPI, Typer, or anything else from an adapter layer.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
@@ -19,6 +20,22 @@ from hashline.tags import extract_tags, normalize_tag
 SCHEMA_VERSION: Final = 1
 
 _SCHEMA_PATH: Final = Path(__file__).with_name("schema.sql")
+
+_DB_ENV_VAR: Final = "HASHLINE_DB"
+
+
+def default_db_path() -> Path:
+    """Where notes live unless an adapter is told otherwise.
+
+    ``$HASHLINE_DB`` wins; otherwise the XDG data directory. Every adapter
+    resolves the database the same way because they all call this.
+    """
+    override = os.environ.get(_DB_ENV_VAR)
+    if override:
+        return Path(override)
+    data_home = os.environ.get("XDG_DATA_HOME")
+    root = Path(data_home) if data_home else Path.home() / ".local" / "share"
+    return root / "hashline" / "hashline.db"
 
 #: The trigram tokenizer indexes three-character sequences, so it cannot match
 #: anything shorter than that.

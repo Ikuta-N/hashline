@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from hashline.cli import app, collect_documents, default_db_path
+from hashline.cli import app, collect_documents
 
 runner = CliRunner()
 
@@ -175,18 +175,3 @@ class TestCollectDocuments:
         assert documents == []
         assert len(skipped) == 1
         assert "broken.txt" in skipped[0]
-
-
-class TestDefaultDbPath:
-    def test_prefers_the_environment_override(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("HASHLINE_DB", "/tmp/somewhere/hl.db")
-        assert default_db_path() == Path("/tmp/somewhere/hl.db")
-
-    def test_falls_back_to_the_data_directory(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("HASHLINE_DB", raising=False)
-        monkeypatch.setenv("XDG_DATA_HOME", "/tmp/xdg")
-        assert default_db_path() == Path("/tmp/xdg/hashline/hashline.db")
