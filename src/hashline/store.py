@@ -18,7 +18,7 @@ from typing import Final
 from hashline.models import BibEntry, Context, Note, NoteDraft, SearchHit, TagCount
 from hashline.tags import extract_tags, normalize_tag
 
-SCHEMA_VERSION: Final = 2
+SCHEMA_VERSION: Final = 3
 
 _MIGRATIONS: Final[Mapping[int, str]] = {
     2: (
@@ -41,6 +41,11 @@ _MIGRATIONS: Final[Mapping[int, str]] = {
         "ALTER TABLE notes ADD COLUMN citekey TEXT REFERENCES bib_entries(citekey);"
         "CREATE INDEX IF NOT EXISTS idx_bib_entries_tag ON bib_entries(tag);"
         "CREATE INDEX IF NOT EXISTS idx_notes_citekey ON notes(citekey);"
+    ),
+    3: (
+        "ALTER TABLE notes ADD COLUMN parent_id INTEGER "
+        "REFERENCES notes(id) ON DELETE CASCADE;"
+        "CREATE INDEX IF NOT EXISTS idx_notes_parent ON notes(parent_id);"
     ),
 }
 
@@ -124,6 +129,7 @@ def _to_note(row: sqlite3.Row) -> Note:
         source=row["source"],
         page=row["page"],
         citekey=row["citekey"],
+        parent_id=row["parent_id"],
     )
 
 
@@ -209,6 +215,7 @@ class Store:
         extra_tags: Sequence[str] = (),
         page: str | None = None,
         citekey: str | None = None,
+        parent_id: int | None = None,
     ) -> Note:
         """Store one note, linking both its inline #tags and ``extra_tags``."""
         draft = NoteDraft(
@@ -219,7 +226,8 @@ class Store:
             page=page,
             citekey=citekey,
         )
-        return self.add_notes([draft])[0]
+        with self._conn:
+            return self._insert(draft, parent_id=parent_id)
 
     def add_notes(self, drafts: Iterable[NoteDraft]) -> list[Note]:
         """Store many notes in a single transaction.
@@ -230,12 +238,28 @@ class Store:
         if not items:
             return []
         notes: list[Note] = []
+        ids: list[int] = []
         with self._conn:
-            for draft in items:
-                notes.append(self._insert(draft))
+            for i, draft in enumerate(items):
+                parent_id = None
+                if draft.parent_index is not None:
+                    if draft.parent_index >= i:
+                        raise ValueError(
+                            f"forward parent_index {draft.parent_index} at position {i}"
+                        )
+                    parent_id = ids[draft.parent_index]
+                note = self._insert(draft, parent_id=parent_id)
+                ids.append(note.id)
+                notes.append(note)
         return notes
 
-    def _insert(self, draft: NoteDraft) -> Note:
+    def _insert(self, draft: NoteDraft, parent_id: int | None = None) -> Note:
+        if parent_id is not None:
+            (exists,) = self._conn.execute(
+                "SELECT count(*) FROM notes WHERE id = ?", (parent_id,)
+            ).fetchone()
+            if not exists:
+                raise ValueError(f"parent_id {parent_id} does not exist")
         body = draft.body.strip()
         if not body:
             raise ValueError("note body must not be blank")
@@ -245,9 +269,9 @@ class Store:
         page = draft.page.strip() if draft.page else None
         page = page if page else None
         cursor = self._conn.execute(
-            "INSERT INTO notes (body, created_at, source, page, citekey) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (body, created_text, draft.source, page, draft.citekey),
+            "INSERT INTO notes (body, created_at, source, page, citekey, parent_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (body, created_text, draft.source, page, draft.citekey, parent_id),
         )
         note_id = cursor.lastrowid
         if note_id is None:  # pragma: no cover - sqlite always reports it here
@@ -260,6 +284,7 @@ class Store:
             source=draft.source,
             page=page,
             citekey=draft.citekey,
+            parent_id=parent_id,
         )
 
     @staticmethod
@@ -290,7 +315,7 @@ class Store:
 
     def get_note(self, note_id: int) -> Note | None:
         row = self._conn.execute(
-            "SELECT id, body, created_at, source, page, citekey "
+            "SELECT id, body, created_at, source, page, citekey, parent_id "
             "FROM notes WHERE id = ?",
             (note_id,),
         ).fetchone()
@@ -299,6 +324,7 @@ class Store:
     def list_notes(
         self,
         *,
+        roots_only: bool = False,
         tag: str | None = None,
         citekey: str | None = None,
         limit: int = 50,
@@ -308,35 +334,39 @@ class Store:
 
         Optionally narrowed to one tag or citekey.
         """
+        where_clauses = []
+        params: list[object] = []
+        
+        if roots_only:
+            where_clauses.append("n.parent_id IS NULL")
+
         if citekey is not None:
-            rows = self._conn.execute(
-                "SELECT id, body, created_at, source, page, citekey FROM notes "
-                "WHERE citekey = ? "
-                "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
-                (citekey, limit, offset),
-            ).fetchall()
-            return [_to_note(row) for row in rows]
+            where_clauses.append("n.citekey = ?")
+            params.append(citekey)
 
-        if tag is None:
-            rows = self._conn.execute(
-                "SELECT id, body, created_at, source, page, citekey FROM notes "
-                "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
-            return [_to_note(row) for row in rows]
+        tag_name: str | None = None
+        if tag is not None:
+            tag_name = _filter_tag(tag)
+            if tag_name is None:
+                return []
+            where_clauses.append("t.name = ?")
+            params.append(tag_name)
 
-        name = _filter_tag(tag)
-        if name is None:
-            return []
-        rows = self._conn.execute(
-            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey "
-            "FROM notes n "
-            "JOIN note_tags nt ON nt.note_id = n.id "
-            "JOIN tags t ON t.id = nt.tag_id "
-            "WHERE t.name = ? "
-            "ORDER BY n.created_at DESC, n.id DESC LIMIT ? OFFSET ?",
-            (name, limit, offset),
-        ).fetchall()
+        sql = (
+            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey, "
+            "n.parent_id FROM notes n "
+        )
+        if tag_name is not None:
+            sql += "JOIN note_tags nt ON nt.note_id = n.id "
+            sql += "JOIN tags t ON t.id = nt.tag_id "
+            
+        if where_clauses:
+            sql += "WHERE " + " AND ".join(where_clauses) + " "
+            
+        sql += "ORDER BY n.created_at DESC, n.id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        rows = self._conn.execute(sql, params).fetchall()
         return [_to_note(row) for row in rows]
 
     def count_notes(self, *, tag: str | None = None) -> int:
@@ -369,6 +399,43 @@ class Store:
         rows = self._conn.execute(sql, params).fetchall()
         return [TagCount(name=row["name"], count=row["count"]) for row in rows]
 
+    def replies_to(self, note_id: int) -> list[Note]:
+        """Return direct children of note_id, ordered by created_at then id."""
+        rows = self._conn.execute(
+            "SELECT id, body, created_at, source, page, citekey, parent_id "
+            "FROM notes WHERE parent_id = ? ORDER BY created_at, id",
+            (note_id,)
+        ).fetchall()
+        return [_to_note(row) for row in rows]
+
+    def thread(self, note_id: int) -> list[Note]:
+        """Return the note and all its descendants, depth-first.
+        Siblings ordered by created_at then id.
+        """
+        # Recursive CTE for depth-first traversal.
+        # SQLite recursive CTE processes depth-first if we sort properly.
+        # But native depth-first is easier by maintaining a sort key.
+        sql = """
+            WITH RECURSIVE
+              thread_tree(id, body, created_at, source, page, citekey, parent_id,
+                          sort_key) AS (
+                SELECT id, body, created_at, source, page, citekey, parent_id,
+                       printf('%s-%08X', created_at, id)
+                FROM notes WHERE id = ?
+                UNION ALL
+                SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey,
+                       n.parent_id,
+                       t.sort_key || '/' || printf('%s-%08X', n.created_at, n.id)
+                FROM notes n
+                JOIN thread_tree t ON n.parent_id = t.id
+              )
+            SELECT * FROM thread_tree ORDER BY sort_key;
+        """
+        rows = self._conn.execute(sql, (note_id,)).fetchall()
+        if not rows:
+            raise ValueError(f"note_id {note_id} does not exist")
+        return [_to_note(row) for row in rows]
+
     # --- embeddings (semantic search) ------------------------------------
 
     def upsert_embedding(
@@ -397,7 +464,8 @@ class Store:
     ) -> list[Note]:
         """Return notes this model has not embedded yet, oldest id first."""
         sql = (
-            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey "
+            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey, "
+            "n.parent_id "
             "FROM notes n "
             "LEFT JOIN embeddings e ON e.note_id = n.id AND e.model = ? "
             "WHERE e.note_id IS NULL ORDER BY n.id"
@@ -447,6 +515,7 @@ class Store:
     ) -> list[SearchHit]:
         sql = (
             "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey, "
+            "n.parent_id, "
             "-bm25(notes_fts) AS score "
             "FROM notes_fts JOIN notes n ON n.id = notes_fts.rowid "
             "WHERE notes_fts MATCH ?"
@@ -465,7 +534,8 @@ class Store:
         self, text: str, tag: str | None, limit: int
     ) -> list[SearchHit]:
         sql = (
-            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey "
+            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey, "
+            "n.parent_id "
             "FROM notes n "
             "WHERE n.body LIKE ? ESCAPE '\\'"
         )

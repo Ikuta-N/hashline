@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS notes (
   created_at TEXT NOT NULL,          -- UTC ISO 8601, microsecond precision
   source     TEXT,                   -- import origin; NULL for notes typed by hand
   page       TEXT,
-  citekey    TEXT REFERENCES bib_entries(citekey)
+  citekey    TEXT REFERENCES bib_entries(citekey),
+  parent_id  INTEGER REFERENCES notes(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS tags (
@@ -57,6 +58,7 @@ CREATE INDEX IF NOT EXISTS idx_note_tags_tag    ON note_tags(tag_id);
 CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(model);
 CREATE INDEX IF NOT EXISTS idx_bib_entries_tag  ON bib_entries(tag);
 CREATE INDEX IF NOT EXISTS idx_notes_citekey    ON notes(citekey);
+CREATE INDEX IF NOT EXISTS idx_notes_parent     ON notes(parent_id);
 
 -- trigram so that Japanese text is searchable; unicode61 cannot segment it.
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(

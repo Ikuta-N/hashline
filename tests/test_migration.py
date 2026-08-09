@@ -78,7 +78,7 @@ def _build_v1_db(conn: sqlite3.Connection) -> None:
 
 
 class TestMigration:
-    def test_v1_database_gains_page_and_citekey_columns(
+    def test_v1_database_gains_new_columns(
         self, tmp_path: pytest.TempPathFactory
     ) -> None:
         db = tmp_path / "test.db"  # type: ignore[union-attr]
@@ -95,6 +95,7 @@ class TestMigration:
             }
             assert "page" in cols
             assert "citekey" in cols
+            assert "parent_id" in cols
 
     def test_pre_existing_note_survives_migration(
         self, tmp_path: pytest.TempPathFactory
@@ -168,7 +169,7 @@ class TestMigration:
         with pytest.raises(SchemaVersionError):
             Store.open(db)
 
-    def test_fresh_database_has_both_columns(self) -> None:
+    def test_fresh_database_has_all_columns(self) -> None:
         with Store.open(":memory:") as store:
             cols = {
                 row[1]
@@ -178,3 +179,4 @@ class TestMigration:
             }
             assert "page" in cols
             assert "citekey" in cols
+            assert "parent_id" in cols

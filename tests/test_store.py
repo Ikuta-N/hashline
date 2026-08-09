@@ -117,6 +117,10 @@ class TestAddNote:
         (count,) = store._conn.execute("SELECT count(*) FROM tags").fetchone()
         assert count == 1
 
+    def test_rejects_unknown_parent_id(self, store: Store) -> None:
+        with pytest.raises(ValueError):
+            store.add_note("child", parent_id=999)
+
 
 class TestAddNotes:
     def test_stores_every_draft(self, store: Store) -> None:
@@ -133,6 +137,21 @@ class TestAddNotes:
         with pytest.raises(ValueError):
             store.add_notes([NoteDraft(body="good"), NoteDraft(body="  ")])
         assert store.list_notes() == []
+
+    def test_resolves_parent_index(self, store: Store) -> None:
+        notes = store.add_notes([
+            NoteDraft(body="parent"),
+            NoteDraft(body="child", parent_index=0),
+        ])
+        assert notes[0].id > 0
+        assert notes[1].parent_id == notes[0].id
+
+    def test_rejects_forward_parent_index(self, store: Store) -> None:
+        with pytest.raises(ValueError, match="forward parent_index 1"):
+            store.add_notes([
+                NoteDraft(body="child", parent_index=1),
+                NoteDraft(body="parent"),
+            ])
 
 
 class TestGetAndDelete:
@@ -185,6 +204,40 @@ class TestListNotes:
 
     def test_empty_store(self, store: Store) -> None:
         assert store.list_notes() == []
+
+    def test_roots_only_excludes_replies(self, store: Store) -> None:
+        parent = store.add_note("parent")
+        store.add_note("child", parent_id=parent.id)
+        roots = store.list_notes(roots_only=True)
+        assert [n.body for n in roots] == ["parent"]
+
+
+class TestReplies:
+    def test_replies_to_returns_direct_children(self, store: Store) -> None:
+        parent = store.add_note("parent")
+        child1 = store.add_note("child1", parent_id=parent.id)
+        child2 = store.add_note("child2", parent_id=parent.id)
+        # Add a grandchild to make sure it's not included
+        store.add_note("grandchild", parent_id=child1.id)
+        
+        replies = store.replies_to(parent.id)
+        assert [n.id for n in replies] == [child1.id, child2.id]
+
+    def test_thread_orders_depth_first(self, store: Store) -> None:
+        parent = store.add_note("parent")
+        child1 = store.add_note("child1", parent_id=parent.id)
+        child2 = store.add_note("child2", parent_id=parent.id)
+        gc1 = store.add_note("gc1", parent_id=child1.id)
+        gc2 = store.add_note("gc2", parent_id=child1.id)
+        
+        thread = store.thread(parent.id)
+        assert [n.id for n in thread] == [
+            parent.id, child1.id, gc1.id, gc2.id, child2.id
+        ]
+
+    def test_thread_raises_on_unknown_id(self, store: Store) -> None:
+        with pytest.raises(ValueError):
+            store.thread(999)
 
 
 def _tags_of(store: Store, note_id: int) -> list[str]:

@@ -18,6 +18,7 @@ class Note:
     source: str | None = None
     page: str | None = None
     citekey: str | None = None
+    parent_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +64,7 @@ class NoteDraft:
     extra_tags: tuple[str, ...] = ()
     page: str | None = None
     citekey: str | None = None
+    parent_index: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
