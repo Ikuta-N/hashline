@@ -239,44 +239,19 @@ is not beaten by one that a single ranker happened to put 20th.
 
 ### How vectors are stored
 
-The `embeddings` table has been in the schema from the first release —
-`(note_id, model)` keyed so several models coexist — so this needed **no
-migration and no reimport**.
+The `embeddings` table has been in the schema since the first release, so this needed no migration and no reimport.
 
-- **`float32`, little-endian, fixed explicitly.** A `.db` file is portable
-  between machines, so byte order is part of the format rather than a property
-  of whoever wrote the row. 384 dimensions is 1.5 KB per note.
-- **`dim` lives in its column, not in a header inside the BLOB.** The row
-  already records it; a second copy would be a second thing that can disagree.
-  `unpack_vector(blob, expected_dim=...)` cross-checks the two.
-- **Vectors are L2-normalized on write,** so a search is one matrix product.
-- **`embeddings.model` records the prefix convention, not just the model
-  name** (`intfloat/multilingual-e5-small+query`). e5 returns different vectors
-  for the same text under a different prefix, and e5-small is 384-wide exactly
-  like the English MiniLM model it replaced — so no dimension check could catch
-  vectors from the two being mixed. Only this key can, and changing either the
-  model or the prefix leaves the old rows sitting under their own key,
-  unread and unharmed.
-
-Both sides — the note and the search for it — are embedded with the `query: `
-prefix. Finding notes that mean the same thing as a phrase is a symmetric task,
-which is the case the e5 authors give for one prefix throughout.
+- Little-endian `float32`, fixed explicitly, so a `.db` file stays portable between machines.
+- `dim` lives in its own column, not a header inside the BLOB.
+- Vectors are L2-normalized on write.
+- `embeddings.model` records the prefix convention (`intfloat/multilingual-e5-small+query`), not just the model name — e5-small is 384-wide exactly like the MiniLM model it replaced, so no dimension check could catch the two being mixed.
 
 ### What runs where
 
-`ml/search.py` is pure numpy: arrays and rank lists in, ranked ids out. It
-imports neither torch nor sentence-transformers, and its tests are part of the
-default suite. `ml/embed.py` imports the backend inside functions, so the
-module costs nothing to import and `is_available()` can report whether semantic
-search can run at all. `ml/protocols.py` is the one-method `Embedder` protocol
-both sides agree on, which is what lets the CLI tests inject a fake and run in
-CI without downloading anything.
-
-The CLI imports all of this inside the two commands that need it: numpy alone
-takes 86 ms against 38 ms for the whole CLI, and `hashline add` should not pay
-that.
-
-Not yet in the web UI — `--semantic` is CLI-only for now.
+- `ml/search.py` is pure numpy and imports no model runtime.
+- `ml/embed.py` imports the backend inside functions.
+- `ml/protocols.py` defines the `Embedder` protocol both sides share.
+- The CLI imports both only inside the two commands that need them; `--semantic` is still CLI-only, not in the web UI.
 
 ## Upgrading
 
