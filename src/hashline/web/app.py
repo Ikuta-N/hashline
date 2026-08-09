@@ -10,6 +10,7 @@ import re
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Final
+from urllib.parse import urlsplit
 
 from fastapi import (
     Depends,
@@ -47,19 +48,27 @@ _SAFE_METHODS: Final = {"GET", "HEAD", "OPTIONS"}
 async def reject_cross_origin_writes(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
-    """Reject a state-changing request whose Origin does not match this host.
+    """Reject a state-changing request whose Origin is not this host.
 
     A cross-origin form POST needs no preflight, so any page left open in a
     browser could otherwise delete notes or replace the bibliography here.
-    Browsers always attach Origin to a cross-origin POST; curl and every
-    request this app's own UI makes send none, so a request with no Origin
-    at all is let through -- checking every state-changing route here, in
-    one place, beats a check copied into each handler.
+    Browsers attach Origin to every non-GET form post and fetch, same-origin
+    ones included, so it is the comparison below -- not the presence of the
+    header -- that lets this app's own UI through. A request carrying no
+    Origin at all is not from a browser (curl, httpx, the test client) and
+    is let through; checking every state-changing route here, in one place,
+    beats a check copied into each handler.
+
+    Only the host is compared. Behind anything that terminates TLS -- a
+    reverse proxy, a tunnel -- the browser sends ``https`` while this app
+    still sees ``http`` on the ASGI scope, and comparing the scheme would
+    403 every write and take the whole UI down. The host is the part that
+    matters anyway: the browser, not the attacker's page, decides which
+    host it connects to.
     """
     origin = request.headers.get("origin")
     if request.method not in _SAFE_METHODS and origin is not None:
-        request_origin = f"{request.url.scheme}://{request.url.netloc}"
-        if origin != request_origin:
+        if urlsplit(origin).netloc != request.url.netloc:
             return Response(
                 status_code=403, content="cross-origin request rejected"
             )
