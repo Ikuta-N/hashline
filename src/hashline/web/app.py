@@ -604,7 +604,7 @@ def bib_import(
 
     entries, problems = parse_bibtex(text)
 
-    if not entries and not problems:
+    if not entries:
         return templates.TemplateResponse(
             request=request,
             name="import.html",
@@ -612,6 +612,7 @@ def bib_import(
                 "current_page": "import",
                 "total": store.count_notes(),
                 "error": "Parsed to nothing",
+                "skipped": problems,
             },
         )
 
