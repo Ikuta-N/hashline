@@ -11,7 +11,10 @@ import pytest
 
 from hashline.ml.embed import (
     DEFAULT_MODEL,
+    EMBEDDING_KEY,
+    QUERY_PREFIX,
     MlExtraNotInstalled,
+    _SentenceTransformerEmbedder,
     embed_texts,
     is_available,
     load_model,
@@ -19,6 +22,7 @@ from hashline.ml.embed import (
     unpack_matrix,
     unpack_vector,
 )
+from hashline.ml.protocols import Embedder
 from hashline.ml.search import rank_by_similarity
 
 
@@ -36,6 +40,38 @@ class TestIsAvailable:
             return
         with pytest.raises(MlExtraNotInstalled, match="ml"):
             load_model()
+
+
+class TestEmbeddingKey:
+    """What goes in embeddings.model has to identify the prefix too.
+
+    e5 returns different vectors for the same text under a different prefix,
+    and e5-small is 384-wide exactly like the MiniLM model it replaced -- so
+    no dimension check could ever catch vectors from the two being mixed.
+    Only this key can.
+    """
+
+    def test_names_the_model(self) -> None:
+        assert DEFAULT_MODEL in EMBEDDING_KEY
+
+    def test_records_the_prefix_convention(self) -> None:
+        assert EMBEDDING_KEY != DEFAULT_MODEL
+        assert EMBEDDING_KEY.endswith(QUERY_PREFIX.strip().rstrip(":"))
+
+
+class TestSentenceTransformerAdapter:
+    """The seam that keeps the backend's options out of the protocol."""
+
+    def test_asks_the_backend_for_numpy_and_narrows_to_float32(self) -> None:
+        class FakeSentenceTransformer:
+            def encode(self, texts: list[str], **options: object) -> np.ndarray:
+                assert options == {"convert_to_numpy": True}
+                return np.array([[1.0, 2.0]] * len(texts), dtype=np.float64)
+
+        adapter = _SentenceTransformerEmbedder(FakeSentenceTransformer())
+        result = adapter.encode(["one", "two"])
+        assert result.shape == (2, 2)
+        assert result.dtype == np.float32
 
 
 class TestVectorCodec:
@@ -63,6 +99,36 @@ class TestVectorCodec:
 
     def test_empty_blob_gives_an_empty_vector(self) -> None:
         assert unpack_vector(b"").shape == (0,)
+
+    def test_the_stored_bytes_are_little_endian(self) -> None:
+        """The format is fixed, not inherited from whoever wrote the row.
+
+        A .db file moves between machines, so a natively packed vector read
+        on a host of the other byte order would come back as plausible
+        garbage -- no exception, only wrong rankings.
+        """
+        # float32 1.0 is 0x3F800000, so little-endian puts 0x3F last.
+        assert pack_vector(np.array([1.0], dtype=np.float32)) == b"\x00\x00\x80\x3f"
+
+    def test_reads_a_blob_written_on_a_machine_of_either_byte_order(self) -> None:
+        vector = np.array([0.5, -1.25, 3.0], dtype=np.float32)
+        written_big_endian = vector.astype(">f4").tobytes()
+        assert not np.array_equal(unpack_vector(written_big_endian), vector), (
+            "the fixture is not actually byte-swapped"
+        )
+        assert np.array_equal(unpack_vector(vector.astype("<f4").tobytes()), vector)
+
+    def test_a_dimension_short_of_the_row_is_refused(self) -> None:
+        """embeddings.dim is the record of how wide the vector should be.
+
+        Without the cross-check a blob that lost dimensions reads back as a
+        shorter, entirely plausible vector, and unpack_matrix would only
+        notice if some other row happened to disagree with it.
+        """
+        packed = pack_vector(np.array([1.0, 2.0, 3.0], dtype=np.float32))
+        assert unpack_vector(packed, expected_dim=3).shape == (3,)
+        with pytest.raises(ValueError, match="the row records 4"):
+            unpack_vector(packed, expected_dim=4)
 
 
 class TestUnpackMatrix:
@@ -110,7 +176,40 @@ class TestEmbedTexts:
         result = embed_texts(["ab", "abcd"], model=FakeEncoder())
         assert result.shape == (2, 2)
         assert result.dtype == np.float32
-        assert result[1][0] == 4.0
+        assert result[1][0] == len(QUERY_PREFIX) + 4
+
+    def test_every_text_reaches_the_model_prefixed(self) -> None:
+        """e5 is trained on a prefix that names the role of the text.
+
+        Both sides get "query: ": the task is symmetric, so a note and a
+        search for it must be encoded identically or their vectors are not
+        comparable. Asserting it here means the convention is covered by the
+        default suite, without a model.
+        """
+        seen: list[str] = []
+
+        class RecordingEncoder:
+            def encode(self, texts: list[str]) -> np.ndarray:
+                seen.extend(texts)
+                return np.zeros((len(texts), 2))
+
+        embed_texts(["寝不足", "sleep"], model=RecordingEncoder())
+        assert seen == ["query: 寝不足", "query: sleep"]
+
+    def test_an_embedder_needs_nothing_beyond_the_protocol(self) -> None:
+        """The one method in Embedder is the whole contract.
+
+        embed_texts used to pass convert_to_numpy=True, so anything standing
+        in for a model had to accept sentence-transformers' keyword arguments
+        as well. That option now lives in the adapter load_model returns.
+        """
+
+        class MinimalEmbedder:
+            def encode(self, texts: list[str]) -> np.ndarray:
+                return np.array([[float(len(text))] for text in texts])
+
+        embedder: Embedder = MinimalEmbedder()
+        assert embed_texts(["abc"], model=embedder)[0][0] == len(QUERY_PREFIX) + 3
 
 
 @pytest.mark.slow
@@ -137,3 +236,20 @@ class TestAgainstARealModel:
     def test_a_vector_survives_the_codec(self) -> None:
         vector = embed_texts(["round trip"])[0]
         assert np.allclose(unpack_vector(pack_vector(vector)), vector)
+
+    def test_a_japanese_query_finds_a_japanese_note_by_meaning(self) -> None:
+        """The reason for a multilingual model, in one assertion.
+
+        Neither the query nor the matching note shares a character with the
+        other, so the trigram FTS5 index cannot connect them. This is the
+        retrieval semantic search exists to add.
+        """
+        model = load_model()
+        notes = [
+            "SQLite の全文検索は BM25 で並べ替える",
+            "昨日は寝不足で、朝から頭が回らなかった",
+        ]
+        matrix = embed_texts(notes, model=model)
+        query = embed_texts(["睡眠"], model=model)[0]
+        ranked = rank_by_similarity(query, [0, 1], matrix)
+        assert ranked[0][0] == 1

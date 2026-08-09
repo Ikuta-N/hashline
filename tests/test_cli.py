@@ -2,10 +2,13 @@
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 from typer.testing import CliRunner
 
 from hashline.cli import app
+from hashline.ml import embed
+from hashline.store import Store
 
 runner = CliRunner()
 
@@ -518,3 +521,219 @@ class TestExport:
         query = "SELECT id, body, parent_id FROM notes ORDER BY id"
         rows = conn.execute(query).fetchall()
         assert rows[3] == (4, "child B", 3)
+
+
+class FakeEmbedder:
+    """Encodes a text as a bag of characters, deterministically.
+
+    Enough for the wiring: identical texts get identical vectors, and a
+    query sharing characters with a note scores above one that does not.
+    No model is downloaded, so these tests run in CI.
+    """
+
+    dim = 8
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        rows = np.zeros((len(texts), self.dim), dtype=np.float32)
+        for row, text in enumerate(texts):
+            for character in text:
+                rows[row][ord(character) % self.dim] += 1.0
+        return rows
+
+
+@pytest.fixture
+def fake_model(monkeypatch: pytest.MonkeyPatch) -> FakeEmbedder:
+    embedder = FakeEmbedder()
+    monkeypatch.setattr("hashline.ml.embed.load_model", lambda name=None: embedder)
+    # The fake stands in for an installed backend, so availability has to
+    # agree with it -- the semantic search asks before it reads the index.
+    monkeypatch.setattr("hashline.ml.embed.is_available", lambda: True)
+    return embedder
+
+
+class TestIndex:
+    def test_embeds_every_note_and_reports_the_count(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        run(db, "add", "one")
+        run(db, "add", "two")
+        assert "indexed 2 notes" in run(db, "index")
+
+    def test_a_second_run_has_nothing_to_do(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        run(db, "add", "one")
+        run(db, "index")
+        assert "nothing to index" in run(db, "index")
+
+    def test_rebuild_re_embeds_what_is_already_there(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        run(db, "add", "one")
+        run(db, "index")
+        assert "indexed 1 notes" in run(db, "index", "--rebuild")
+
+    def test_honours_limit(self, db: Path, fake_model: FakeEmbedder) -> None:
+        for body in ("one", "two", "three"):
+            run(db, "add", body)
+        assert "indexed 2 notes" in run(db, "index", "--limit", "2")
+        assert "indexed 1 notes" in run(db, "index")
+
+    def test_stores_unit_length_vectors_under_the_prefixed_key(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        """Normalized on write, so a search is one matrix product.
+
+        The key carries the prefix convention, not just the model name --
+        vectors made under a different convention must never be read as if
+        they were these.
+        """
+        run(db, "add", "one")
+        run(db, "index")
+        with Store.open(db) as store:
+            rows = list(store.iter_embeddings(embed.EMBEDDING_KEY))
+        assert len(rows) == 1
+        vector = embed.unpack_vector(rows[0][1], expected_dim=FakeEmbedder.dim)
+        assert np.isclose(float(np.linalg.norm(vector)), 1.0)
+
+    def test_another_key_does_not_see_these_vectors(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        run(db, "add", "one")
+        run(db, "index", "--model", "some/other-model")
+        with Store.open(db) as store:
+            assert list(store.iter_embeddings(embed.EMBEDDING_KEY)) == []
+            assert len(list(store.iter_embeddings("some/other-model+query"))) == 1
+
+    def test_without_the_extra_it_says_how_to_get_it(
+        self, db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def refuse(name: str = "") -> object:
+            raise embed.MlExtraNotInstalled("needs the 'ml' extra: uv sync --extra ml")
+
+        monkeypatch.setattr("hashline.ml.embed.load_model", refuse)
+        run(db, "add", "one")
+        result = runner.invoke(app, ["--db", str(db), "index"])
+        assert result.exit_code == 1
+        assert "--extra ml" in result.output
+
+    def test_an_empty_database_needs_no_model(self, db: Path) -> None:
+        # No fake_model fixture: nothing should try to load one.
+        assert "nothing to index" in run(db, "index")
+
+
+class TestSemanticSearch:
+    def test_finds_a_note_the_keyword_index_cannot_reach(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        """The whole point: a match with no shared substring.
+
+        The fake embedder scores on shared characters, so "xyz" reaches the
+        note containing them while the trigram index -- searched for the
+        literal phrase -- does not.
+        """
+        run(db, "add", "aaa xyz aaa")
+        run(db, "add", "bbb ccc ddd")
+        run(db, "index")
+        assert "no matches" in run(db, "search", "xyz zyx")
+        assert "aaa xyz aaa" in run(db, "search", "xyz zyx", "--semantic")
+
+    def test_a_keyword_match_still_ranks(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        run(db, "add", "bm25 を調べた")
+        run(db, "index")
+        assert "bm25 を調べた" in run(db, "search", "bm25", "--semantic")
+
+    def test_scores_are_the_fused_ranks(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        # RRF with k=60: a note first in both lists scores 2/61 = 0.0328.
+        run(db, "add", "one note")
+        run(db, "index")
+        assert "0.0328" in run(db, "search", "one note", "--semantic")
+
+    def test_honours_the_tag_filter(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        run(db, "add", "aaa xyz #keep")
+        run(db, "add", "aaa xyz #drop")
+        run(db, "index")
+        output = run(db, "search", "xyz", "--semantic", "--tag", "keep")
+        assert "#keep" in output
+        assert "#drop" not in output
+
+    def test_honours_limit(self, db: Path, fake_model: FakeEmbedder) -> None:
+        for body in ("aaa one", "aaa two", "aaa three"):
+            run(db, "add", body)
+        run(db, "index")
+        output = run(db, "search", "aaa", "--semantic", "--limit", "2")
+        assert len([line for line in output.splitlines() if line.strip()]) == 2
+
+    def test_says_so_when_nothing_is_indexed(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        run(db, "add", "one")
+        output = run(db, "search", "one", "--semantic")
+        assert "run `hashline index`" in output
+        assert "no matches" not in output
+
+    def test_a_missing_extra_is_named_before_the_empty_index(
+        self, db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The first message has to be the actual cause.
+
+        Checked the other way round, a database with no vectors answers "run
+        hashline index" -- and only that command then reveals the extra was
+        never installed.
+        """
+        monkeypatch.setattr("hashline.ml.embed.is_available", lambda: False)
+        run(db, "add", "one")
+        result = runner.invoke(app, ["--db", str(db), "search", "one", "--semantic"])
+        assert result.exit_code == 1
+        assert "--extra ml" in result.output
+        assert "hashline index" not in result.output
+
+    def test_warns_about_notes_added_since_the_last_index(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        """A short result list must not be the only sign of a stale index."""
+        run(db, "add", "aaa one")
+        run(db, "index")
+        run(db, "add", "aaa two")
+        result = runner.invoke(app, ["--db", str(db), "search", "aaa", "--semantic"])
+        assert result.exit_code == 0
+        assert "1 notes are not indexed yet" in result.output
+
+    def test_without_the_extra_it_says_how_to_get_it(
+        self, db: Path, fake_model: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run(db, "add", "one")
+        run(db, "index")
+
+        def refuse(name: str = "") -> object:
+            raise embed.MlExtraNotInstalled("needs the 'ml' extra: uv sync --extra ml")
+
+        monkeypatch.setattr("hashline.ml.embed.load_model", refuse)
+        result = runner.invoke(app, ["--db", str(db), "search", "one", "--semantic"])
+        assert result.exit_code == 1
+        assert "--extra ml" in result.output
+
+    def test_a_plain_search_needs_no_model(self, db: Path) -> None:
+        # No fake_model fixture: the keyword path must not touch the backend.
+        run(db, "add", "bm25 を調べた")
+        assert "bm25 を調べた" in run(db, "search", "bm25")
+
+    def test_reports_no_matches_like_the_keyword_path(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        """The two paths answer an empty result the same way.
+
+        A ranking over indexed notes always has entries, so a zero limit is
+        the only way to empty it -- but the two searches sit behind one
+        command and must not disagree about what nothing looks like.
+        """
+        run(db, "add", "one")
+        run(db, "index")
+        assert "no matches" in run(db, "search", "one", "--limit", "0")
+        assert "no matches" in run(db, "search", "one", "--semantic", "--limit", "0")
