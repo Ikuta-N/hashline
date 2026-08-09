@@ -4,11 +4,28 @@
 -- call on an existing database. The embeddings table is here from the start so
 -- that adding semantic search later needs no migration.
 
+-- bib_entries must precede notes so that the REFERENCES clause on
+-- notes.citekey resolves on a fresh database.
+CREATE TABLE IF NOT EXISTS bib_entries (
+  citekey    TEXT PRIMARY KEY,
+  tag        TEXT NOT NULL,
+  entry_type TEXT NOT NULL,
+  title      TEXT,
+  author     TEXT,
+  year       TEXT,
+  doi        TEXT,
+  raw        TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS notes (
   id         INTEGER PRIMARY KEY,
   body       TEXT NOT NULL,
   created_at TEXT NOT NULL,          -- UTC ISO 8601, microsecond precision
-  source     TEXT                    -- import origin; NULL for notes typed by hand
+  source     TEXT,                   -- import origin; NULL for notes typed by hand
+  page       TEXT,
+  citekey    TEXT REFERENCES bib_entries(citekey),
+  parent_id  INTEGER REFERENCES notes(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS tags (
@@ -31,9 +48,17 @@ CREATE TABLE IF NOT EXISTS embeddings (
   PRIMARY KEY (note_id, model)       -- several models can coexist for one note
 );
 
+CREATE TABLE IF NOT EXISTS app_state (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_notes_created_at ON notes(created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_note_tags_tag    ON note_tags(tag_id);
 CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(model);
+CREATE INDEX IF NOT EXISTS idx_bib_entries_tag  ON bib_entries(tag);
+CREATE INDEX IF NOT EXISTS idx_notes_citekey    ON notes(citekey);
+CREATE INDEX IF NOT EXISTS idx_notes_parent     ON notes(parent_id);
 
 -- trigram so that Japanese text is searchable; unicode61 cannot segment it.
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(

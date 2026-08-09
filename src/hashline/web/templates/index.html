@@ -9,12 +9,12 @@
   :root {
     color-scheme: light dark;
     --bg: #fbfbfa; --fg: #1d1d1f; --muted: #6b6b70;
-    --line: #e3e3e0; --card: #ffffff; --accent: #2f6f4f;
+    --line: #e3e3e0; --card: #ffffff; --accent: #2f6f4f; --danger: #a33a2c;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #16161a; --fg: #ececee; --muted: #9a9aa2;
-      --line: #2c2c33; --card: #1e1e23; --accent: #7fc4a0;
+      --line: #2c2c33; --card: #1e1e23; --accent: #7fc4a0; --danger: #e39184;
     }
   }
   * { box-sizing: border-box; }
@@ -50,6 +50,11 @@
   .note p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   .meta { margin-top: .35rem; font-size: .78rem; color: var(--muted); }
   .empty { padding: 2rem 0; color: var(--muted); text-align: center; }
+  .error {
+    margin: 0 0 .75rem; padding: .6rem .9rem; font-size: .9rem;
+    color: var(--danger); background: var(--card);
+    border: 1px solid var(--danger); border-radius: .5rem;
+  }
 </style>
 </head>
 <body>

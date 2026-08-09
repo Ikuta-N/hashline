@@ -71,9 +71,7 @@ class TestTimelineFragment:
 
 
 class TestCreateNote:
-    def test_stores_the_note_and_returns_the_timeline(
-        self, client: TestClient
-    ) -> None:
+    def test_stores_the_note_and_returns_the_timeline(self, client: TestClient) -> None:
         response = client.post("/notes", data={"body": "新しいメモ #web"})
         assert response.status_code == 200
         assert "新しいメモ #web" in response.text
@@ -87,6 +85,37 @@ class TestCreateNote:
         response = client.post("/notes", data={"body": "   "})
         assert response.status_code == 200
         assert "no notes yet" in client.get("/").text
+
+    def test_applies_pinned_context(self, client: TestClient, tmp_path: Path) -> None:
+        from hashline.models import Context
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.set_context(Context(tags=("reading",)))
+        
+        response = client.post("/notes", data={"body": "a note"})
+        assert response.status_code == 200
+        # The returned HTML should show the 'reading' tag
+        assert "reading" in response.text
+
+    def test_shows_a_message_when_the_pinned_work_is_missing(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        from hashline.models import Context
+
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.set_context(Context(citekey="smith2020"))
+            # We explicitly do NOT insert smith2020 into bib_entries
+
+        response = client.post("/notes", data={"body": "a note"})
+        # 200 with the timeline, not a 4xx: HTMX swaps the response in, so an
+        # error status would leave the user staring at an unchanged page.
+        assert response.status_code == 200
+        assert 'id="timeline"' in response.text
+        assert "is no longer in the bibliography" in response.text
+
+    def test_a_blank_submission_shows_no_error(self, client: TestClient) -> None:
+        response = client.post("/notes", data={"body": "   "})
+        assert response.status_code == 200
+        assert 'class="error"' not in response.text
 
 
 class TestStatic:

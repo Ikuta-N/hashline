@@ -13,7 +13,7 @@ from hashline.models import NoteDraft
 from hashline.tags import normalize_tag
 
 #: How a document is cut into notes.
-SplitMode = Literal["line", "heading"]
+SplitMode = Literal["line", "heading", "outline"]
 
 #: The one interface a split strategy has to satisfy: document text in, note
 #: bodies out. A new mode is a function plus an entry in ``SPLITTERS``.
@@ -31,6 +31,21 @@ class Document:
     text: str
 
 
+def iter_fenced_lines(text: str) -> Iterable[tuple[str, bool]]:
+    """Yield each line and whether it is inside a fenced code block."""
+    fence: str | None = None
+    for line in text.splitlines():
+        marker = _FENCE_RE.match(line)
+        if fence is None and marker is not None:
+            fence = marker.group(1)[0]
+            yield line, True
+        elif fence is not None and marker is not None and marker.group(1)[0] == fence:
+            fence = None
+            yield line, True
+        else:
+            yield line, fence is not None
+
+
 def split_lines(text: str) -> list[str]:
     """One note per non-blank line."""
     return [stripped for line in text.splitlines() if (stripped := line.strip())]
@@ -43,14 +58,8 @@ def split_headings(text: str) -> list[str]:
     A ``#`` inside a fenced code block is code, not a heading.
     """
     sections: list[list[str]] = [[]]
-    fence: str | None = None
-    for line in text.splitlines():
-        marker = _FENCE_RE.match(line)
-        if fence is None and marker is not None:
-            fence = marker.group(1)[0]
-        elif fence is not None and marker is not None and marker.group(1)[0] == fence:
-            fence = None
-        elif fence is None and _HEADING_RE.match(line):
+    for line, is_fenced in iter_fenced_lines(text):
+        if not is_fenced and _HEADING_RE.match(line):
             sections.append([])
         sections[-1].append(line)
     return [body for section in sections if (body := "\n".join(section).strip())]
@@ -73,15 +82,44 @@ def parse_document(
     ``common_tags`` are carried as metadata; the note body is left exactly as it
     was written. Raises ``ValueError`` for an unknown ``mode`` or an unusable tag.
     """
-    try:
-        splitter = SPLITTERS[mode]
-    except KeyError:
-        raise ValueError(f"unknown split mode: {mode!r}") from None
+    from hashline.outline import OutlineItem, split_outline
+
+    if mode == "outline":
+        items = split_outline(doc.text)
+    else:
+        try:
+            splitter = SPLITTERS[mode]
+        except KeyError:
+            raise ValueError(f"unknown split mode: {mode!r}") from None
+        items = [OutlineItem(body=body, depth=0) for body in splitter(doc.text)]
+
     extra = _normalize_common_tags(common_tags)
-    return [
-        NoteDraft(body=body, source=doc.source, extra_tags=extra)
-        for body in splitter(doc.text)
-    ]
+
+    drafts = []
+    stack: list[tuple[int, int]] = []  # (depth, index)
+
+    for i, item in enumerate(items):
+        target_depth = item.depth
+
+        while stack and stack[-1][0] >= target_depth:
+            stack.pop()
+
+        parent_depth = stack[-1][0] if stack else -1
+        parent_index = stack[-1][1] if stack else None
+
+        actual_depth = min(target_depth, parent_depth + 1)
+
+        draft = NoteDraft(
+            body=item.body,
+            source=doc.source,
+            extra_tags=extra,
+            parent_index=parent_index,
+        )
+        drafts.append(draft)
+
+        stack.append((actual_depth, i))
+
+    return drafts
 
 
 def parse_documents(
@@ -91,9 +129,20 @@ def parse_documents(
     common_tags: Sequence[str] = (),
 ) -> list[NoteDraft]:
     """Cut many documents into drafts, keeping the order they were given in."""
+    from dataclasses import replace
+
     drafts: list[NoteDraft] = []
     for doc in docs:
-        drafts.extend(parse_document(doc, mode=mode, common_tags=common_tags))
+        offset = len(drafts)
+        doc_drafts = parse_document(doc, mode=mode, common_tags=common_tags)
+        if offset > 0:
+            doc_drafts = [
+                replace(draft, parent_index=draft.parent_index + offset)
+                if draft.parent_index is not None
+                else draft
+                for draft in doc_drafts
+            ]
+        drafts.extend(doc_drafts)
     return drafts
 
 

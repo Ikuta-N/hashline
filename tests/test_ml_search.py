@@ -88,9 +88,7 @@ class TestRankBySimilarity:
         assert [identifier for identifier, _ in ranked] == [20, 30, 10]
 
     def test_reports_the_similarity(self) -> None:
-        ranked = rank_by_similarity(
-            np.array([1.0, 0.0]), [10], np.array([[1.0, 0.0]])
-        )
+        ranked = rank_by_similarity(np.array([1.0, 0.0]), [10], np.array([[1.0, 0.0]]))
         assert ranked[0][1] == pytest.approx(1.0)
 
     def test_ties_break_on_the_smaller_id(self) -> None:
@@ -100,9 +98,7 @@ class TestRankBySimilarity:
 
     def test_honours_limit(self) -> None:
         matrix = np.array([[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]])
-        ranked = rank_by_similarity(
-            np.array([1.0, 0.0]), [1, 2, 3], matrix, limit=2
-        )
+        ranked = rank_by_similarity(np.array([1.0, 0.0]), [1, 2, 3], matrix, limit=2)
         assert len(ranked) == 2
 
     def test_honours_min_score(self) -> None:
@@ -117,9 +113,7 @@ class TestRankBySimilarity:
 
     def test_rejects_a_length_mismatch(self) -> None:
         with pytest.raises(ValueError, match="ids for"):
-            rank_by_similarity(
-                np.array([1.0, 0.0]), [1, 2], np.array([[1.0, 0.0]])
-            )
+            rank_by_similarity(np.array([1.0, 0.0]), [1, 2], np.array([[1.0, 0.0]]))
 
 
 class TestFuseRankings:

@@ -6,18 +6,62 @@ import FastAPI, Typer, or anything else from an adapter layer.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
 from typing import Final
 
-from hashline.models import Note, NoteDraft, SearchHit, TagCount
+from hashline.models import BibEntry, Context, Note, NoteDraft, SearchHit, TagCount
 from hashline.tags import extract_tags, normalize_tag
 
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 3
+
+_MIGRATIONS: Final[Mapping[int, str]] = {
+    2: (
+        "CREATE TABLE IF NOT EXISTS bib_entries ("
+        "  citekey TEXT PRIMARY KEY,"
+        "  tag TEXT NOT NULL,"
+        "  entry_type TEXT NOT NULL,"
+        "  title TEXT,"
+        "  author TEXT,"
+        "  year TEXT,"
+        "  doi TEXT,"
+        "  raw TEXT NOT NULL,"
+        "  updated_at TEXT NOT NULL"
+        ");"
+        "CREATE TABLE IF NOT EXISTS app_state ("
+        "  key TEXT PRIMARY KEY,"
+        "  value TEXT NOT NULL"
+        ");"
+        "ALTER TABLE notes ADD COLUMN page TEXT;"
+        "ALTER TABLE notes ADD COLUMN citekey TEXT REFERENCES bib_entries(citekey);"
+        "CREATE INDEX IF NOT EXISTS idx_bib_entries_tag ON bib_entries(tag);"
+        "CREATE INDEX IF NOT EXISTS idx_notes_citekey ON notes(citekey);"
+    ),
+    3: (
+        "ALTER TABLE notes ADD COLUMN parent_id INTEGER "
+        "REFERENCES notes(id) ON DELETE CASCADE;"
+        "CREATE INDEX IF NOT EXISTS idx_notes_parent ON notes(parent_id);"
+    ),
+}
+
+
+class SchemaVersionError(Exception):
+    """The database was created by a newer version of the application."""
+
+
+class NoteHasReplies(Exception):
+    """Raised when deleting a note would take its replies with it."""
+
+    def __init__(self, note_id: int, reply_count: int) -> None:
+        super().__init__(f"note {note_id} has {reply_count} replies")
+        self.note_id = note_id
+        self.reply_count = reply_count
+
 
 _SCHEMA_PATH: Final = Path(__file__).with_name("schema.sql")
 
@@ -37,9 +81,13 @@ def default_db_path() -> Path:
     root = Path(data_home) if data_home else Path.home() / ".local" / "share"
     return root / "hashline" / "hashline.db"
 
+
 #: The trigram tokenizer indexes three-character sequences, so it cannot match
 #: anything shorter than that.
 _MIN_TRIGRAM_QUERY: Final = 3
+
+#: The app_state row the pinned Context is stored under, as one JSON blob.
+_CONTEXT_KEY: Final = "context"
 
 
 def _as_phrase(text: str) -> str:
@@ -90,6 +138,9 @@ def _to_note(row: sqlite3.Row) -> Note:
         body=row["body"],
         created_at=datetime.fromisoformat(row["created_at"]),
         source=row["source"],
+        page=row["page"],
+        citekey=row["citekey"],
+        parent_id=row["parent_id"],
     )
 
 
@@ -119,11 +170,48 @@ class Store:
         return store
 
     def init_schema(self) -> None:
-        """Create the schema if it is missing. Safe to call on an existing database."""
-        self._conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+        """Create or migrate the schema.
+
+        Fresh databases get everything from ``schema.sql`` and are stamped with
+        the current :data:`SCHEMA_VERSION`.  Existing databases whose version
+        is behind get each intermediate migration applied in order, each in its
+        own transaction.  A database from a *newer* version raises
+        :class:`SchemaVersionError` so we never silently damage it.
+
+        ``schema.sql`` is only run on databases that have never been versioned
+        (``user_version == 0``), because it references the latest column set
+        and would fail on an older schema that is missing columns.
+        """
         (current,) = self._conn.execute("PRAGMA user_version").fetchone()
+
         if current == 0:
+            # Brand-new database: schema.sql contains the full current schema.
+            self._conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            return
+
+        if current > SCHEMA_VERSION:
+            raise SchemaVersionError(
+                f"database is version {current}, but this build only "
+                f"knows up to version {SCHEMA_VERSION}"
+            )
+
+        for version in range(current + 1, SCHEMA_VERSION + 1):
+            sql = _MIGRATIONS[version]
+            # Migration strings contain no triggers or string literals with semicolons,
+            # so splitting on ';' is safe. We execute them inside a transaction so
+            # failures roll back instead of leaving a half-applied migration.
+            try:
+                self._conn.execute("BEGIN")
+                for statement in sql.split(";"):
+                    statement = statement.strip()
+                    if statement:
+                        self._conn.execute(statement)
+                self._conn.execute(f"PRAGMA user_version = {version}")
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def close(self) -> None:
         self._conn.close()
@@ -148,6 +236,9 @@ class Store:
         created_at: datetime | None = None,
         source: str | None = None,
         extra_tags: Sequence[str] = (),
+        page: str | None = None,
+        citekey: str | None = None,
+        parent_id: int | None = None,
     ) -> Note:
         """Store one note, linking both its inline #tags and ``extra_tags``."""
         draft = NoteDraft(
@@ -155,8 +246,11 @@ class Store:
             created_at=created_at,
             source=source,
             extra_tags=tuple(extra_tags),
+            page=page,
+            citekey=citekey,
         )
-        return self.add_notes([draft])[0]
+        with self._conn:
+            return self._insert(draft, parent_id=parent_id)
 
     def add_notes(self, drafts: Iterable[NoteDraft]) -> list[Note]:
         """Store many notes in a single transaction.
@@ -167,20 +261,40 @@ class Store:
         if not items:
             return []
         notes: list[Note] = []
+        ids: list[int] = []
         with self._conn:
-            for draft in items:
-                notes.append(self._insert(draft))
+            for i, draft in enumerate(items):
+                parent_id = None
+                if draft.parent_index is not None:
+                    if draft.parent_index >= i:
+                        raise ValueError(
+                            f"forward parent_index {draft.parent_index} at position {i}"
+                        )
+                    parent_id = ids[draft.parent_index]
+                note = self._insert(draft, parent_id=parent_id)
+                ids.append(note.id)
+                notes.append(note)
         return notes
 
-    def _insert(self, draft: NoteDraft) -> Note:
+    def _insert(self, draft: NoteDraft, parent_id: int | None = None) -> Note:
+        if parent_id is not None:
+            (exists,) = self._conn.execute(
+                "SELECT count(*) FROM notes WHERE id = ?", (parent_id,)
+            ).fetchone()
+            if not exists:
+                raise ValueError(f"parent_id {parent_id} does not exist")
         body = draft.body.strip()
         if not body:
             raise ValueError("note body must not be blank")
         created_at = draft.created_at if draft.created_at is not None else _utc_now()
         created_text = _to_text(created_at)
+        # Blank/whitespace-only page normalises to None.
+        page = draft.page.strip() if draft.page else None
+        page = page if page else None
         cursor = self._conn.execute(
-            "INSERT INTO notes (body, created_at, source) VALUES (?, ?, ?)",
-            (body, created_text, draft.source),
+            "INSERT INTO notes (body, created_at, source, page, citekey, parent_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (body, created_text, draft.source, page, draft.citekey, parent_id),
         )
         note_id = cursor.lastrowid
         if note_id is None:  # pragma: no cover - sqlite always reports it here
@@ -191,6 +305,9 @@ class Store:
             body=body,
             created_at=datetime.fromisoformat(created_text),
             source=draft.source,
+            page=page,
+            citekey=draft.citekey,
+            parent_id=parent_id,
         )
 
     @staticmethod
@@ -211,44 +328,89 @@ class Store:
                 (note_id, name),
             )
 
-    def delete_note(self, note_id: int) -> bool:
-        """Delete a note. Returns whether it existed."""
+    def delete_note(self, note_id: int, *, recursive: bool = False) -> int:
+        """Delete a note. Returns how many notes were removed (the subtree size).
+
+        If the note has replies and recursive is False, raises NoteHasReplies.
+        This guard is only at the application level; SQL deleting the note directly
+        will still cascade.
+        """
         with self._conn:
-            cursor = self._conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
-        return cursor.rowcount > 0
+            (exists,) = self._conn.execute(
+                "SELECT count(*) FROM notes WHERE id = ?", (note_id,)
+            ).fetchone()
+            if not exists:
+                return 0
+
+            (reply_count,) = self._conn.execute(
+                "SELECT count(*) FROM notes WHERE parent_id = ?", (note_id,)
+            ).fetchone()
+
+            if reply_count > 0 and not recursive:
+                raise NoteHasReplies(note_id, reply_count)
+
+            # Count the entire thread subtree before deleting.
+            count = len(self.thread(note_id))
+
+            self._conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+            return count
 
     # --- reading ---------------------------------------------------------
 
     def get_note(self, note_id: int) -> Note | None:
         row = self._conn.execute(
-            "SELECT id, body, created_at, source FROM notes WHERE id = ?",
+            "SELECT id, body, created_at, source, page, citekey, parent_id "
+            "FROM notes WHERE id = ?",
             (note_id,),
         ).fetchone()
         return _to_note(row) if row is not None else None
 
     def list_notes(
-        self, *, tag: str | None = None, limit: int = 50, offset: int = 0
+        self,
+        *,
+        roots_only: bool = False,
+        tag: str | None = None,
+        citekey: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
     ) -> list[Note]:
-        """Return the timeline, newest first, optionally narrowed to one tag."""
-        if tag is None:
-            rows = self._conn.execute(
-                "SELECT id, body, created_at, source FROM notes "
-                "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
-            return [_to_note(row) for row in rows]
+        """Return the timeline, newest first.
 
-        name = _filter_tag(tag)
-        if name is None:
-            return []
-        rows = self._conn.execute(
-            "SELECT n.id, n.body, n.created_at, n.source FROM notes n "
-            "JOIN note_tags nt ON nt.note_id = n.id "
-            "JOIN tags t ON t.id = nt.tag_id "
-            "WHERE t.name = ? "
-            "ORDER BY n.created_at DESC, n.id DESC LIMIT ? OFFSET ?",
-            (name, limit, offset),
-        ).fetchall()
+        Optionally narrowed to one tag or citekey.
+        """
+        where_clauses = []
+        params: list[object] = []
+
+        if roots_only:
+            where_clauses.append("n.parent_id IS NULL")
+
+        if citekey is not None:
+            where_clauses.append("n.citekey = ?")
+            params.append(citekey)
+
+        tag_name: str | None = None
+        if tag is not None:
+            tag_name = _filter_tag(tag)
+            if tag_name is None:
+                return []
+            where_clauses.append("t.name = ?")
+            params.append(tag_name)
+
+        sql = (
+            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey, "
+            "n.parent_id FROM notes n "
+        )
+        if tag_name is not None:
+            sql += "JOIN note_tags nt ON nt.note_id = n.id "
+            sql += "JOIN tags t ON t.id = nt.tag_id "
+
+        if where_clauses:
+            sql += "WHERE " + " AND ".join(where_clauses) + " "
+
+        sql += "ORDER BY n.created_at DESC, n.id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        rows = self._conn.execute(sql, params).fetchall()
         return [_to_note(row) for row in rows]
 
     def count_notes(self, *, tag: str | None = None) -> int:
@@ -281,6 +443,43 @@ class Store:
         rows = self._conn.execute(sql, params).fetchall()
         return [TagCount(name=row["name"], count=row["count"]) for row in rows]
 
+    def replies_to(self, note_id: int) -> list[Note]:
+        """Return direct children of note_id, ordered by created_at then id."""
+        rows = self._conn.execute(
+            "SELECT id, body, created_at, source, page, citekey, parent_id "
+            "FROM notes WHERE parent_id = ? ORDER BY created_at, id",
+            (note_id,),
+        ).fetchall()
+        return [_to_note(row) for row in rows]
+
+    def thread(self, note_id: int) -> list[Note]:
+        """Return the note and all its descendants, depth-first.
+        Siblings ordered by created_at then id.
+        """
+        # Recursive CTE for depth-first traversal.
+        # SQLite recursive CTE processes depth-first if we sort properly.
+        # But native depth-first is easier by maintaining a sort key.
+        sql = """
+            WITH RECURSIVE
+              thread_tree(id, body, created_at, source, page, citekey, parent_id,
+                          sort_key) AS (
+                SELECT id, body, created_at, source, page, citekey, parent_id,
+                       printf('%s-%08X', created_at, id)
+                FROM notes WHERE id = ?
+                UNION ALL
+                SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey,
+                       n.parent_id,
+                       t.sort_key || '/' || printf('%s-%08X', n.created_at, n.id)
+                FROM notes n
+                JOIN thread_tree t ON n.parent_id = t.id
+              )
+            SELECT * FROM thread_tree ORDER BY sort_key;
+        """
+        rows = self._conn.execute(sql, (note_id,)).fetchall()
+        if not rows:
+            raise ValueError(f"note_id {note_id} does not exist")
+        return [_to_note(row) for row in rows]
+
     # --- embeddings (semantic search) ------------------------------------
 
     def upsert_embedding(
@@ -309,7 +508,9 @@ class Store:
     ) -> list[Note]:
         """Return notes this model has not embedded yet, oldest id first."""
         sql = (
-            "SELECT n.id, n.body, n.created_at, n.source FROM notes n "
+            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey, "
+            "n.parent_id "
+            "FROM notes n "
             "LEFT JOIN embeddings e ON e.note_id = n.id AND e.model = ? "
             "WHERE e.note_id IS NULL ORDER BY n.id"
         )
@@ -357,7 +558,8 @@ class Store:
         self, text: str, tag: str | None, limit: int
     ) -> list[SearchHit]:
         sql = (
-            "SELECT n.id, n.body, n.created_at, n.source, "
+            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey, "
+            "n.parent_id, "
             "-bm25(notes_fts) AS score "
             "FROM notes_fts JOIN notes n ON n.id = notes_fts.rowid "
             "WHERE notes_fts MATCH ?"
@@ -376,7 +578,9 @@ class Store:
         self, text: str, tag: str | None, limit: int
     ) -> list[SearchHit]:
         sql = (
-            "SELECT n.id, n.body, n.created_at, n.source FROM notes n "
+            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey, "
+            "n.parent_id "
+            "FROM notes n "
             "WHERE n.body LIKE ? ESCAPE '\\'"
         )
         params: list[object] = [_as_like_pattern(text)]
@@ -398,3 +602,189 @@ class Store:
             (note_id,),
         ).fetchall()
         return [row["name"] for row in rows]
+
+    # --- bibliography ----------------------------------------------------
+
+    def upsert_bib_entries(
+        self, entries: Iterable[BibEntry], *, replace: bool = False
+    ) -> tuple[int, int]:
+        """Insert or update bibliography entries.
+
+        Uses ``ON CONFLICT(citekey) DO UPDATE`` so re-importing a library
+        refreshes rather than fails.  With ``replace=True`` the existing
+        library is cleared first, in the same transaction as the insert, so a
+        re-import that dropped entries does not leave the old ones behind.
+        Returns a tuple of (written_count, kept_count).
+        """
+        stamp = _to_text(_utc_now())
+        written = 0
+        kept = 0
+        with self._conn:
+            if replace:
+                cursor = self._conn.execute(
+                    "SELECT COUNT(*) FROM bib_entries WHERE citekey IN "
+                    "(SELECT citekey FROM notes WHERE citekey IS NOT NULL)"
+                )
+                kept = cursor.fetchone()[0]
+                self._conn.execute(
+                    "DELETE FROM bib_entries "
+                    "WHERE citekey NOT IN ("
+                    "SELECT citekey FROM notes WHERE citekey IS NOT NULL"
+                    ")"
+                )
+            for entry in entries:
+                self._conn.execute(
+                    "INSERT INTO bib_entries "
+                    "(citekey, tag, entry_type, title, author, year, doi, "
+                    "raw, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(citekey) DO UPDATE SET "
+                    "tag = excluded.tag, "
+                    "entry_type = excluded.entry_type, "
+                    "title = excluded.title, "
+                    "author = excluded.author, "
+                    "year = excluded.year, "
+                    "doi = excluded.doi, "
+                    "raw = excluded.raw, "
+                    "updated_at = excluded.updated_at",
+                    (
+                        entry.citekey,
+                        entry.tag,
+                        entry.entry_type,
+                        entry.title,
+                        entry.author,
+                        entry.year,
+                        entry.doi,
+                        entry.raw,
+                        stamp,
+                    ),
+                )
+                written += 1
+        return written, kept
+
+    def get_bib_entry(self, citekey: str) -> BibEntry | None:
+        """Return a single bibliography entry, or ``None`` if unknown."""
+        row = self._conn.execute(
+            "SELECT citekey, tag, entry_type, title, author, year, doi, raw "
+            "FROM bib_entries WHERE citekey = ?",
+            (citekey,),
+        ).fetchone()
+        if row is None:
+            return None
+        return BibEntry(
+            citekey=row["citekey"],
+            tag=row["tag"],
+            entry_type=row["entry_type"],
+            title=row["title"],
+            author=row["author"],
+            year=row["year"],
+            doi=row["doi"],
+            raw=row["raw"],
+        )
+
+    def list_bib_entries(self, *, limit: int | None = None) -> list[BibEntry]:
+        """Return all bibliography entries, ordered by citekey."""
+        sql = (
+            "SELECT citekey, tag, entry_type, title, author, year, doi, raw "
+            "FROM bib_entries ORDER BY citekey"
+        )
+        params: tuple[int, ...] = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (limit,)
+        rows = self._conn.execute(sql, params).fetchall()
+        return [
+            BibEntry(
+                citekey=row["citekey"],
+                tag=row["tag"],
+                entry_type=row["entry_type"],
+                title=row["title"],
+                author=row["author"],
+                year=row["year"],
+                doi=row["doi"],
+                raw=row["raw"],
+            )
+            for row in rows
+        ]
+
+    # --- context -----------------------------------------------------------
+
+    def get_context(self) -> Context:
+        """Return the pinned context, or an empty ``Context`` when none is set."""
+        row = self._conn.execute(
+            "SELECT value FROM app_state WHERE key = ?", (_CONTEXT_KEY,)
+        ).fetchone()
+        if row is None:
+            return Context()
+        data = json.loads(row["value"])
+        return Context(tags=tuple(data["tags"]), citekey=data["citekey"])
+
+    def set_context(self, context: Context) -> None:
+        """Persist ``context`` as the pinned context, replacing any previous one.
+
+        Tags are normalized on the way in through ``tags.normalize_tag``, so a
+        tag that could never be a valid ``#tag`` fails here -- where the user
+        typed it -- rather than later, silently, when a note tries to use it.
+        """
+        payload = json.dumps(
+            {
+                "tags": [normalize_tag(tag) for tag in context.tags],
+                "citekey": context.citekey,
+            }
+        )
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO app_state (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (_CONTEXT_KEY, payload),
+            )
+
+    def clear_context(self) -> None:
+        """Unpin the context, if one is set."""
+        with self._conn:
+            self._conn.execute("DELETE FROM app_state WHERE key = ?", (_CONTEXT_KEY,))
+
+    def add_note_with_context(
+        self,
+        body: str,
+        *,
+        page: str | None = None,
+        extra_tags: Sequence[str] = (),
+        parent_id: int | None = None,
+    ) -> Note:
+        """Store one note under the pinned context.
+
+        Composes the tag list from three sources: the body's own inline
+        ``#tags`` (``add_note`` -> ``_insert`` already handles those), the
+        pinned context's tags, and, when the context has a citekey, that
+        entry's ``bib_entries.tag`` -- so a note written while "reading" a
+        work is tagged with that work automatically. ``page`` and the
+        citekey come from the context too.
+
+        ``add_note`` itself deliberately never reads the context. Keeping
+        implicit state out of the repository's core write path means every
+        other caller -- ``add_notes``, the importer -- stays predictable and
+        testable without a context to set up first. This method is the one
+        place the composition happens, and both the CLI and the web adapter
+        call it so pinning behaves the same from either.
+        """
+        context = self.get_context()
+        tags = list(extra_tags) + list(context.tags)
+
+        if context.citekey is not None:
+            bib = self.get_bib_entry(context.citekey)
+            if bib is not None:
+                tags.append(bib.tag)
+            else:
+                raise ValueError(
+                    f"the pinned work {context.citekey!r} is no longer in "
+                    "the bibliography; run `hashline read stop` or re-import it"
+                )
+
+        return self.add_note(
+            body,
+            page=page,
+            citekey=context.citekey,
+            extra_tags=tags,
+            parent_id=parent_id,
+        )

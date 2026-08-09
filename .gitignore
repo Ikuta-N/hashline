@@ -17,7 +17,14 @@ __pycache__/
 .env
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 figs/*.pdf
 
 # local file
 *.local.json
+
+# scratch space for hand-off prompts; contents are not part of the project
+tmp/

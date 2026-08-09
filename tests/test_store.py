@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from hashline.models import NoteDraft
-from hashline.store import SCHEMA_VERSION, Store, default_db_path
+from hashline.store import SCHEMA_VERSION, NoteHasReplies, Store, default_db_path
 
 
 @pytest.fixture
@@ -117,6 +117,10 @@ class TestAddNote:
         (count,) = store._conn.execute("SELECT count(*) FROM tags").fetchone()
         assert count == 1
 
+    def test_rejects_unknown_parent_id(self, store: Store) -> None:
+        with pytest.raises(ValueError):
+            store.add_note("child", parent_id=999)
+
 
 class TestAddNotes:
     def test_stores_every_draft(self, store: Store) -> None:
@@ -134,6 +138,25 @@ class TestAddNotes:
             store.add_notes([NoteDraft(body="good"), NoteDraft(body="  ")])
         assert store.list_notes() == []
 
+    def test_resolves_parent_index(self, store: Store) -> None:
+        notes = store.add_notes(
+            [
+                NoteDraft(body="parent"),
+                NoteDraft(body="child", parent_index=0),
+            ]
+        )
+        assert notes[0].id > 0
+        assert notes[1].parent_id == notes[0].id
+
+    def test_rejects_forward_parent_index(self, store: Store) -> None:
+        with pytest.raises(ValueError, match="forward parent_index 1"):
+            store.add_notes(
+                [
+                    NoteDraft(body="child", parent_index=1),
+                    NoteDraft(body="parent"),
+                ]
+            )
+
 
 class TestGetAndDelete:
     def test_get_returns_the_note(self, store: Store) -> None:
@@ -145,8 +168,8 @@ class TestGetAndDelete:
 
     def test_delete_reports_whether_it_existed(self, store: Store) -> None:
         note = store.add_note("doomed")
-        assert store.delete_note(note.id) is True
-        assert store.delete_note(note.id) is False
+        assert store.delete_note(note.id) == 1
+        assert store.delete_note(note.id) == 0
 
     def test_delete_cascades_to_note_tags(self, store: Store) -> None:
         note = store.add_note("doomed #sqlite")
@@ -161,6 +184,62 @@ class TestGetAndDelete:
             "SELECT rowid FROM notes_fts WHERE notes_fts MATCH '\"doomed\"'"
         ).fetchall()
         assert rows == []
+
+    def test_delete_raises_if_replies_exist_and_not_recursive(
+        self, store: Store
+    ) -> None:
+        parent = store.add_note("parent")
+        store.add_note("child", parent_id=parent.id)
+
+        with pytest.raises(NoteHasReplies) as excinfo:
+            store.delete_note(parent.id)
+        assert excinfo.value.note_id == parent.id
+        assert excinfo.value.reply_count == 1
+
+    def test_recursive_delete_removes_thread_and_returns_count(
+        self, store: Store
+    ) -> None:
+        parent = store.add_note("parent")
+        child = store.add_note("child", parent_id=parent.id)
+        store.add_note("grandchild", parent_id=child.id)
+
+        assert store.delete_note(parent.id, recursive=True) == 3
+        assert store.list_notes() == []
+
+    def test_recursive_delete_removes_subtree_note_tags_and_embeddings(
+        self, store: Store
+    ) -> None:
+        parent = store.add_note("parent #sqlite")
+        child = store.add_note("child #python", parent_id=parent.id)
+        store.upsert_embedding(parent.id, model="test", vector=b"123", dim=1)
+        store.upsert_embedding(child.id, model="test", vector=b"456", dim=1)
+
+        store.delete_note(parent.id, recursive=True)
+
+        (tags_count,) = store._conn.execute("SELECT count(*) FROM note_tags").fetchone()
+        assert tags_count == 0
+        (embed_count,) = store._conn.execute(
+            "SELECT count(*) FROM embeddings"
+        ).fetchone()
+        assert embed_count == 0
+
+    def test_recursive_delete_keeps_fts_integrity(self, store: Store) -> None:
+        survivor = store.add_note("survivor node")
+        parent = store.add_note("parent thread")
+        child = store.add_note("child thread", parent_id=parent.id)
+        store.add_note("grandchild thread", parent_id=child.id)
+
+        store.delete_note(parent.id, recursive=True)
+
+        # FTS integrity check
+        store._conn.execute(
+            "INSERT INTO notes_fts(notes_fts) VALUES('integrity-check')"
+        )
+
+        # Surviving note should still be searchable
+        hits = store.search_notes("survivor")
+        assert len(hits) == 1
+        assert hits[0].note.id == survivor.id
 
 
 class TestListNotes:
@@ -185,6 +264,44 @@ class TestListNotes:
 
     def test_empty_store(self, store: Store) -> None:
         assert store.list_notes() == []
+
+    def test_roots_only_excludes_replies(self, store: Store) -> None:
+        parent = store.add_note("parent")
+        store.add_note("child", parent_id=parent.id)
+        roots = store.list_notes(roots_only=True)
+        assert [n.body for n in roots] == ["parent"]
+
+
+class TestReplies:
+    def test_replies_to_returns_direct_children(self, store: Store) -> None:
+        parent = store.add_note("parent")
+        child1 = store.add_note("child1", parent_id=parent.id)
+        child2 = store.add_note("child2", parent_id=parent.id)
+        # Add a grandchild to make sure it's not included
+        store.add_note("grandchild", parent_id=child1.id)
+
+        replies = store.replies_to(parent.id)
+        assert [n.id for n in replies] == [child1.id, child2.id]
+
+    def test_thread_orders_depth_first(self, store: Store) -> None:
+        parent = store.add_note("parent")
+        child1 = store.add_note("child1", parent_id=parent.id)
+        child2 = store.add_note("child2", parent_id=parent.id)
+        gc1 = store.add_note("gc1", parent_id=child1.id)
+        gc2 = store.add_note("gc2", parent_id=child1.id)
+
+        thread = store.thread(parent.id)
+        assert [n.id for n in thread] == [
+            parent.id,
+            child1.id,
+            gc1.id,
+            gc2.id,
+            child2.id,
+        ]
+
+    def test_thread_raises_on_unknown_id(self, store: Store) -> None:
+        with pytest.raises(ValueError):
+            store.thread(999)
 
 
 def _tags_of(store: Store, note_id: int) -> list[str]:

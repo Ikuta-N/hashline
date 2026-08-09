@@ -16,6 +16,9 @@ class Note:
     body: str
     created_at: datetime
     source: str | None = None
+    page: str | None = None
+    citekey: str | None = None
+    parent_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,3 +62,40 @@ class NoteDraft:
     created_at: datetime | None = None
     source: str | None = None
     extra_tags: tuple[str, ...] = ()
+    page: str | None = None
+    citekey: str | None = None
+    parent_index: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BibEntry:
+    """A parsed BibTeX entry.
+
+    ``tag`` is the citekey normalized into a form that ``tags.normalize_tag``
+    accepts, so it can be used as an inline ``#tag``.
+    """
+
+    citekey: str
+    tag: str
+    entry_type: str
+    title: str | None = None
+    author: str | None = None
+    year: str | None = None
+    doi: str | None = None
+    raw: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Context:
+    """A pinned tag/citekey context applied to new notes.
+
+    Empty by default. See ``Store.add_note_with_context`` for how this
+    composes with a note's own inline ``#tags``.
+    """
+
+    tags: tuple[str, ...] = ()
+    citekey: str | None = None
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.tags and self.citekey is None

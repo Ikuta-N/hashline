@@ -13,6 +13,9 @@ Everything lives in one SQLite file on your machine. Nothing is uploaded.
   tokenizer, so `全文検索` matches without any word segmentation.
 - **Bulk import.** Point it at a directory of `.md` / `.txt` files and every
   line, or every Markdown section, becomes a note.
+- **Reading mode.** Pin a BibTeX reference while reading; captured notes automatically carry the citekey tag and page number.
+- **Replies and threads.** Reply to notes to build threads and structured note trees.
+- **Markdown round-trip.** Export note trees as indented Markdown outlines, or import outline files back into notes.
 
 ## Install
 
@@ -61,19 +64,101 @@ uses; it honours `$HASHLINE_DB`. HTMX is vendored under
 ### `import`
 
 ```
-hashline import PATH... [--mode line|heading] [--tag NAME] [--dry-run]
+hashline import PATH... [--mode line|heading|outline] [--tag NAME] [--dry-run]
 ```
 
 - `--mode line` (default) makes one note per non-blank line.
 - `--mode heading` makes one note per Markdown section — a heading plus the
   lines under it. Text before the first heading is kept as its own note, and a
   `#` inside a fenced code block does not start a section.
+- `--mode outline` parses indented bullet lists into note trees, matching the format produced by `hashline export`.
 - `--tag NAME` is repeatable and tags every note from that run. It is stored as
   a tag only: **the note body is left exactly as written**, so `--tag` names do
   not turn up in full-text search results.
 - Directories are walked recursively for `.md`, `.markdown` and `.txt`. A file
   named directly on the command line is read whatever it is called.
 - `--dry-run` reports what would be imported and writes nothing.
+
+### Reading notes
+
+Pin a bibliography entry while reading to automatically tag and cite captured notes:
+
+```bash
+# import bibliography entries from a .bib file
+uv run hashline bib import library.bib [--replace]
+uv run hashline bib list
+uv run hashline bib show smith2020
+
+# pin a work to start reading mode
+uv run hashline read start smith2020 [--tag NAME]
+uv run hashline read status
+
+# capture notes with page numbers (carried into context automatically)
+uv run hashline add "Trigram indexing is fast for short queries #notes" --page 12-15
+
+# filter notes by citation key
+uv run hashline list --citekey smith2020
+
+# stop reading mode
+uv run hashline read stop
+```
+
+Things worth knowing:
+- `read status` reports the pinned **work**. If only plain tags are pinned via `pin`, `read status` says nothing is pinned — use `pin --show` for those.
+- A note captured under a reading context receives both the reading tag (`#reading` by default, or custom `--tag NAME`) and the work's citekey tag (e.g. `#smith2020`).
+- `--page` is a free-form string (`"42"`, `"12-15"`, `"xii"`, `"第3章"`) and there is therefore no page ordering or range search.
+- `--page` without a pinned work is an error, not a silent no-op.
+- LaTeX escapes in `.bib` values are stored as written; `{\"o}` is not turned into `ö`.
+- The BibTeX parser skips an entry it cannot read and reports it, rather than failing the whole import.
+
+### Pinned tags
+
+Pin tags across multiple `add` invocations without repeating them:
+
+```bash
+# pin tags for subsequent notes
+uv run hashline pin research sqlite
+
+# check currently pinned tags
+uv run hashline pin --show
+
+# capture a note (receives #research and #sqlite tags automatically)
+uv run hashline add "Investigating indexing performance"
+
+# clear pinned tags
+uv run hashline pin --clear
+```
+
+Like `import --tag`, `hashline pin` tags without touching the body, so pinned tag names do not turn up in full-text search results.
+
+### Replies and outlines
+
+Notes can reply to existing notes, forming threads and tree structures:
+
+```bash
+# reply to a note ID to build a thread
+uv run hashline reply 1 "Sub-point about implementation"
+
+# view a thread indented by depth
+uv run hashline thread 1
+
+# list timeline hiding replies
+uv run hashline list --roots-only
+
+# delete a note (refuses if it has replies unless --recursive is passed)
+uv run hashline rm 1 [--recursive]
+
+# export notes as a Markdown outline
+uv run hashline export [--tag X] [--citekey Y] [--root ID] [-o FILE]
+
+# import an outline file back into note trees
+uv run hashline import PATH --mode outline
+```
+
+Things worth knowing:
+- `rm` refuses a note that has replies; `--recursive` removes the thread.
+- `export` promotes a note whose parent is outside the selection to a root, so filtering never makes replies disappear.
+- There is no reparenting: restructuring means deleting and re-entering.
 
 ### Things worth knowing about search
 
@@ -85,6 +170,16 @@ hashline import PATH... [--mode line|heading] [--tag NAME] [--dry-run]
   fall back to a substring scan, come back newest-first, and score `0.00`.
 - The whole query is treated as literal text. `#`, `-`, `*` and `"` are
   searched for, not interpreted as operators.
+
+## Upgrading
+
+This release carries the project's first schema migrations. An existing database is upgraded in place the next time it is opened, and going back to an older version of `hashline` afterwards will not work.
+
+Before upgrading, it is recommended to copy your database file to back it up. The database location is specified by `$HASHLINE_DB`, or defaults to `~/.local/share/hashline/hashline.db`:
+
+```bash
+cp "${HASHLINE_DB:-$HOME/.local/share/hashline/hashline.db}" ~/hashline.db.bak
+```
 
 ## Development
 
@@ -118,6 +213,8 @@ src/hashline/
   tags.py       #tag extraction (pure functions)
   store.py      SQLite repository; no web or CLI dependency
   importer.py   documents -> note drafts (pure functions; no file I/O)
+  bib.py        BibTeX parsing (pure functions; no file I/O)
+  outline.py    Markdown outline building and rendering (pure functions)
   cli.py        Typer adapter; owns all filesystem I/O
   schema.sql    tables, indexes, FTS5 index and its sync triggers
   web/app.py    FastAPI + HTMX adapter
@@ -125,8 +222,8 @@ src/hashline/
 tests/
 ```
 
-The core (`models`, `tags`, `store`, `importer`) is plain Python over the
-standard library plus numpy. The CLI and the web UI are thin adapters over it.
+The core (`models`, `tags`, `store`, `importer`, `bib`, `outline`) is plain Python
+over the standard library plus numpy. The CLI and the web UI are thin adapters over it.
 
 ## Roadmap
 
@@ -159,3 +256,4 @@ What is left is wiring it into the CLI and the web UI: an indexing pass over
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
