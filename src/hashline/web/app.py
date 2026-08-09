@@ -248,28 +248,49 @@ def thread(
     request: Request,
     store: StoreDep,
     note_id: int,
+    q: str = "",
+    tag: str = "",
+    citekey: str = "",
+    roots_only: bool = False,
+    limit: int = 50,
 ) -> HTMLResponse:
+    """The subtree rooted at note_id, still carrying the caller's filters.
+
+    Answers 200 even when note_id does not exist: htmx does not swap a
+    non-2xx response, so a stale thread button (the note behind it was
+    deleted from another tab, say) would otherwise leave the page sitting
+    there doing nothing. The existing error slot in _timeline.html renders
+    instead.
+    """
+    error: str | None = None
+    items: list[tuple[Note, list[str], int]] = []
     try:
         found = store.thread(note_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Note not found") from exc
+        error = str(exc)
+    else:
 
-    def flatten(
-        roots: Sequence[OutlineNode], depth: int = 0
-    ) -> Iterator[tuple[Note, list[str], int]]:
-        for root in roots:
-            yield root.note, store.tags_for_note(root.note.id), depth
-            yield from flatten(root.children, depth + 1)
+        def flatten(
+            roots: Sequence[OutlineNode], depth: int = 0
+        ) -> Iterator[tuple[Note, list[str], int]]:
+            for root in roots:
+                yield root.note, store.tags_for_note(root.note.id), depth
+                yield from flatten(root.children, depth + 1)
 
-    items = list(flatten(build_tree(found)))
+        items = list(flatten(build_tree(found)))
 
     return templates.TemplateResponse(
         request=request,
         name="_timeline.html",
         context={
             "notes": items,
-            "q": "",
-            "tag": "",
+            "q": q,
+            "tag": tag,
+            "citekey": citekey,
+            "roots_only": roots_only,
+            "limit": limit,
+            "thread_root": note_id,
+            "error": error,
         },
     )
 

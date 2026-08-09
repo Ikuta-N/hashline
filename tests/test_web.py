@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -35,6 +36,20 @@ def _hidden_field_values(html: str) -> dict[str, str]:
     renders, rather than fields we assume it should carry.
     """
     return dict(re.findall(r'name="(\w+)" value="([^"]*)"', html))
+
+
+def _fail(reason: str) -> object:
+    raise AssertionError(reason)
+
+
+class _FakeEmbedder:
+    """Returns one fixed vector, so no model is ever downloaded."""
+
+    def __init__(self, vector: list[float]) -> None:
+        self._vector = vector
+
+    def encode(self, texts: list[str]) -> "np.ndarray":
+        return np.array([self._vector for _ in texts], dtype=np.float32)
 
 
 class TestHtmxTargets:
@@ -727,9 +742,102 @@ class TestThreadView:
         assert "grandchild" in body
         assert "unrelated" not in body
 
-    def test_unknown_id_is_404(self, client: TestClient) -> None:
+    def test_unknown_id_answers_200_with_an_error_not_a_404(
+        self, client: TestClient
+    ) -> None:
+        # htmx does not swap a non-2xx response, so a stale thread button
+        # (the note behind it deleted from another tab, say) would leave the
+        # page sitting there doing nothing. The existing error slot in
+        # _timeline.html renders instead.
         response = client.get("/notes/999/thread")
-        assert response.status_code == 404
+        assert response.status_code == 200
+        assert 'class="error"' in response.text
+
+    def test_thread_button_carries_hx_include_for_the_active_filters(
+        self, seeded: TestClient
+    ) -> None:
+        body = seeded.get("/notes").text
+        match = re.search(r'<button hx-get="/notes/1/thread"[^>]*>', body)
+        assert match is not None, "thread button not found in the timeline"
+        button = match.group(0)
+        assert 'hx-include="' in button, (
+            "thread button has no hx-include, so following it drops the "
+            "active q/tag/citekey/roots_only/limit filters"
+        )
+        for name in ("q", "tag", "citekey", "roots_only", "limit"):
+            assert f"[name='{name}']" in button, (
+                f"thread button's hx-include is missing [name='{name}']"
+            )
+
+    def test_thread_view_accepts_the_filter_query_params(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        # _timeline.html itself renders no hidden q/tag/citekey/roots_only/
+        # limit fields -- those live in index.html, outside the swapped
+        # #timeline -- so what this proves is that thread() takes the same
+        # filter params as every other timeline-returning route and passes
+        # them into the back control (checked separately below) instead of
+        # rejecting them or dropping them silently.
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("root #keep")
+        response = client.get(
+            "/notes/1/thread",
+            params={
+                "q": "root",
+                "tag": "keep",
+                "citekey": "",
+                "roots_only": "true",
+                "limit": 5,
+            },
+        )
+        assert response.status_code == 200
+        assert "root" in response.text
+
+    def test_thread_view_has_a_back_control_with_the_active_filters(
+        self, seeded: TestClient
+    ) -> None:
+        response = seeded.get("/notes/1/thread", params={"tag": "sqlite"})
+        assert response.status_code == 200
+        back = re.search(r'<button hx-get="/notes"[^>]*>', response.text)
+        assert back is not None, "thread view has no back-to-notes control"
+        button = back.group(0)
+        assert 'hx-target="#timeline"' in button
+        assert 'hx-swap="outerHTML"' in button
+        for name in ("q", "tag", "citekey", "roots_only", "limit"):
+            assert f"[name='{name}']" in button, (
+                f"back control's hx-include is missing [name='{name}']"
+            )
+        assert "all notes" in response.text
+
+    def test_pressing_back_restores_exactly_the_filtered_timeline(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("keep this #keep")
+            store.add_note("drop this #other")
+        # What the filtered index page looked like before the user opened
+        # a thread from inside it.
+        before = client.get("/", params={"tag": "keep"}).text
+        assert "keep this" in before
+        assert "drop this" not in before
+
+        client.get("/notes/1/thread", params={"tag": "keep"})
+
+        # The back control's hx-include names q/tag/citekey/roots_only/limit,
+        # which htmx reads from the fields still on the page (outside the
+        # swapped #timeline) -- so pressing it fires exactly this request.
+        after = client.get("/notes", params={"tag": "keep"}).text
+        assert "keep this" in after
+        assert "drop this" not in after
+
+    def test_ordinary_timeline_fragments_render_no_back_control(
+        self, seeded: TestClient
+    ) -> None:
+        # _timeline.html is also rendered by routes that pass no thread_root;
+        # Jinja renders that as falsey, so nothing should change for them.
+        body = seeded.get("/notes").text
+        assert "all notes" not in body
+        assert 'hx-get="/notes"' not in body
 
 
 class TestDeleteNote:
@@ -1965,3 +2073,169 @@ class TestFormContracts:
                 f"{sorted(fields)}, which that route rejects as invalid: "
                 f"{response.text[:200]}"
             )
+
+
+class TestSemanticSearch:
+    """The web's half of semantic search: the toggle and what it says.
+
+    The ranking itself is tested in tests/test_ml_search.py and the CLI's
+    wiring in tests/test_cli.py; these are the adapter's own concerns.
+    """
+
+    @staticmethod
+    def _embed(tmp_path: Path, bodies: dict[int, list[float]]) -> None:
+        """Write vectors straight into the store, no model involved."""
+        from hashline.ml.embed import embedding_key, pack_vector
+
+        with Store.open(tmp_path / "hashline.db") as store:
+            for note_id, vector in bodies.items():
+                store.upsert_embedding(
+                    note_id,
+                    model=embedding_key(),
+                    vector=pack_vector(np.array(vector, dtype=np.float32)),
+                    dim=len(vector),
+                )
+
+    def test_the_search_form_offers_the_toggle(self, client: TestClient) -> None:
+        assert 'name="semantic"' in client.get("/").text
+
+    def test_a_missing_extra_says_so_instead_of_no_matches(
+        self, seeded: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty result alone would blame the notes for a missing library."""
+        monkeypatch.setattr("hashline.ml.embed.is_available", lambda: False)
+        body = seeded.get("/notes", params={"q": "bm25", "semantic": "true"}).text
+        assert "uv sync --extra ml" in body
+        assert 'class="notice"' in body
+
+    def test_an_empty_index_says_indexing_is_running(
+        self, seeded: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("hashline.ml.embed.is_available", lambda: True)
+        body = seeded.get("/notes", params={"q": "bm25", "semantic": "true"}).text
+        assert "indexing" in body.lower()
+        assert 'class="notice"' in body
+
+    def test_it_ranks_by_the_stored_vectors(
+        self, seeded: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Note 2 is the nearest vector, so it must outrank note 1.
+
+        Keyword search alone puts note 1 first (it is the only one containing
+        the query), so the order here can only come from the fusion.
+        """
+        monkeypatch.setattr("hashline.ml.embed.is_available", lambda: True)
+        monkeypatch.setattr(
+            "hashline.ml.embed.load_model", lambda name=None: _FakeEmbedder([0.0, 1.0])
+        )
+        self._embed(tmp_path, {1: [1.0, 0.0], 2: [0.0, 1.0]})
+        body = seeded.get("/notes", params={"q": "bm25", "semantic": "true"}).text
+        assert body.index("無関係なメモ") < body.index("bm25 を調べた")
+
+    def test_a_half_indexed_library_says_how_much_is_left(
+        self, seeded: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A short answer with no explanation reads as "there is nothing else"."""
+        monkeypatch.setattr("hashline.ml.embed.is_available", lambda: True)
+        monkeypatch.setattr(
+            "hashline.ml.embed.load_model", lambda name=None: _FakeEmbedder([1.0, 0.0])
+        )
+        self._embed(tmp_path, {1: [1.0, 0.0]})
+        body = seeded.get("/notes", params={"q": "bm25", "semantic": "true"}).text
+        assert "1 notes are still being indexed" in body
+
+    def test_the_toggle_survives_capturing_a_note(
+        self, seeded: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every control that redraws the timeline has to carry the mode.
+
+        Otherwise adding a note while a semantic search is on silently drops
+        back to keyword results, with the checkbox still ticked.
+        """
+        monkeypatch.setattr("hashline.ml.embed.is_available", lambda: True)
+        monkeypatch.setattr(
+            "hashline.ml.embed.load_model", lambda name=None: _FakeEmbedder([1.0, 0.0])
+        )
+        self._embed(tmp_path, {1: [1.0, 0.0], 2: [0.0, 1.0]})
+        response = seeded.post(
+            "/notes", data={"body": "another", "q": "bm25", "semantic": "true"}
+        )
+        assert response.status_code == 200
+        assert "1 notes are still being indexed" in response.text
+
+    def test_a_plain_search_never_touches_the_backend(
+        self, seeded: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def explode(name: str = "") -> object:
+            raise AssertionError("the keyword path loaded an embedding model")
+
+        monkeypatch.setattr("hashline.ml.embed.load_model", explode)
+        assert seeded.get("/notes", params={"q": "bm25"}).status_code == 200
+
+
+class TestStartupIndexing:
+    """Indexing runs at startup so the web never needs the CLI.
+
+    Three gates stop it from touching a model; each is tested because the
+    default test run has the extra installed on the author's machine and not
+    in CI, and both have to stay quiet.
+    """
+
+    def test_no_index_env_skips_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from hashline.web import app as web_app
+
+        monkeypatch.setenv("HASHLINE_NO_INDEX", "1")
+        monkeypatch.setattr(
+            "hashline.ml.hybrid.is_available", lambda: _fail("checked availability")
+        )
+        web_app._index_in_background()  # must return before the gate below
+
+    def test_an_empty_database_needs_no_model(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hashline.web import app as web_app
+
+        monkeypatch.delenv("HASHLINE_NO_INDEX", raising=False)
+        monkeypatch.setenv("HASHLINE_DB", str(tmp_path / "hashline.db"))
+        monkeypatch.setattr("hashline.ml.hybrid.is_available", lambda: True)
+        monkeypatch.setattr(
+            "hashline.ml.hybrid.index_pending",
+            lambda *a, **k: _fail("embedded an empty database"),
+        )
+        web_app._index_in_background()
+
+    def test_a_failure_does_not_take_the_app_down(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Serving notes must not depend on an optional model working."""
+        from hashline.web import app as web_app
+
+        monkeypatch.delenv("HASHLINE_NO_INDEX", raising=False)
+        monkeypatch.setenv("HASHLINE_DB", str(tmp_path / "hashline.db"))
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("something to embed")
+        monkeypatch.setattr("hashline.ml.hybrid.is_available", lambda: True)
+
+        def boom(*args: object, **kwargs: object) -> int:
+            raise RuntimeError("model exploded")
+
+        monkeypatch.setattr("hashline.ml.hybrid.index_pending", boom)
+        web_app._index_in_background()  # raising here would kill the server
+
+    def test_it_embeds_what_is_pending(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hashline.ml.embed import embedding_key
+        from hashline.web import app as web_app
+
+        monkeypatch.delenv("HASHLINE_NO_INDEX", raising=False)
+        monkeypatch.setenv("HASHLINE_DB", str(tmp_path / "hashline.db"))
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("something to embed")
+        monkeypatch.setattr("hashline.ml.hybrid.is_available", lambda: True)
+        monkeypatch.setattr(
+            "hashline.ml.embed.load_model", lambda name=None: _FakeEmbedder([1.0, 0.0])
+        )
+        web_app._index_in_background()
+        with Store.open(tmp_path / "hashline.db") as store:
+            assert len(list(store.iter_embeddings(embedding_key()))) == 1
