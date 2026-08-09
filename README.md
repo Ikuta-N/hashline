@@ -222,15 +222,17 @@ app installs, starts and works fully without it.
 ```bash
 uv sync --extra ml            # torch (CPU build) and sentence-transformers
 uv run hashline index         # embed every note not embedded yet
-uv run hashline search 睡眠 --semantic
+uv run hashline search 眠れない --semantic
 ```
 
 ```
-0.0164      1  2026-08-09 22:18  昨日は寝不足で、朝から頭が回らなかった  [日記]
-0.0161      3  2026-08-09 22:18  夜ふかしをやめたい                      [日記]
+0.0164      5  2026-08-09 22:45  昨日は寝不足で頭が回らなかった #日記  [日記]
+0.0161      3  2026-08-09 22:45  朝の散歩を習慣にしたい #日記          [日記]
 ```
 
-Neither note contains 睡眠, so `hashline search 睡眠` on its own finds nothing.
+Neither note contains 眠れない, so `hashline search 眠れない` on its own finds
+nothing — which is the last pair of commands in the session at the top of this
+file.
 
 `hashline index` walks `notes_without_embedding`, so re-running it costs
 nothing; `--rebuild` re-embeds everything and `--limit` stops early. A search
