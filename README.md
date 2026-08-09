@@ -175,8 +175,8 @@ Things worth knowing:
 - The whole query is treated as literal text. `#`, `-`, `*` and `"` are
   searched for, not interpreted as operators.
 - `--semantic` blends in a ranking by meaning; see
-  [Semantic search](#semantic-search). It needs the `ml` extra and a
-  `hashline index` pass, and says so when either is missing.
+  [Semantic search](#semantic-search). It needs the `ml` extra and an index
+  pass, and says which is missing rather than answering with nothing.
 
 ## Web UI
 
@@ -185,11 +185,12 @@ uv run uvicorn hashline.web.app:app --reload
 # http://127.0.0.1:8000
 ```
 
-![The hashline web UI: the pinned-context strip, the composer, tag chips, and
-a timeline with a reply nested under its parent](docs/web-ui.png)
+![The hashline web UI: the pinned-context strip, a multi-line composer, the
+semantic toggle, and a Markdown document imported as a nested
+chapter/section/subsection thread](docs/web-ui.png)
 
-Capture, tag filtering and search-as-you-type over the same database the CLI
-uses; it honours `$HASHLINE_DB`. HTMX is vendored under
+Capture, filtering and search-as-you-type over the same database the CLI uses;
+it honours `$HASHLINE_DB`. HTMX is vendored under
 `src/hashline/web/static/`, so the page needs no CDN and works offline. The
 vendored build is htmx 2.0.4 (`htmx.min.js`, ~50 KB), licensed 0BSD, which
 carries no attribution requirement — update the file by hand when a new
@@ -214,7 +215,8 @@ The Web UI implements equivalent functionality to the CLI commands:
 | `hashline import` | `POST /import` (also supports browser uploads) |
 | `hashline bib import` | `POST /bib/import` (also supports browser uploads) |
 | `hashline export` | `GET /export`, `GET /export/download` |
-| `hashline index`, `search --semantic` | *CLI only* |
+| `hashline index` | runs by itself when the server starts |
+| `hashline search --semantic` | the **semantic** toggle beside the search box |
 
 One deliberate difference: `hashline read start` replaces the pinned tags, while `POST /context/read` adds the reading tag to them. The context strip shows the pinned tags and the pinned work side by side with a clear button each, so starting a read there should not empty the column next to it.
 
@@ -239,6 +241,12 @@ uv run hashline search 眠れない --semantic
 Neither note contains 眠れない, so `hashline search 眠れない` on its own finds
 nothing — which is the last pair of commands in the session at the top of this
 file.
+
+In the web UI it is the **semantic** checkbox beside the search box, and there
+is nothing to run first: the server embeds whatever is unembedded in a
+background thread as it starts, so the page is usable immediately and results
+improve as the pass finishes. Set `HASHLINE_NO_INDEX=1` to skip that. Without
+the extra installed the toggle says so instead of returning nothing.
 
 `hashline index` walks `notes_without_embedding`, so re-running it costs
 nothing; `--rebuild` re-embeds everything and `--limit` stops early. A search
@@ -272,7 +280,10 @@ symmetric task.
 - `ml/search.py` is pure numpy and imports no model runtime.
 - `ml/embed.py` imports the backend inside functions.
 - `ml/protocols.py` defines the `Embedder` protocol both sides share.
-- The CLI imports both only inside the two commands that need them; `--semantic` is still CLI-only, not in the web UI.
+- `ml/hybrid.py` reads vectors out of a store and fuses the two rankings. Both
+  adapters call it, so neither owns a copy of the retrieval logic.
+- Both adapters import all of it inside the functions that need it, so nothing
+  pays for numpy at startup.
 
 ## Upgrading
 
