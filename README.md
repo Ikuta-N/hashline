@@ -7,6 +7,9 @@ Local-first micro-notes. Capture a thought in one line, tag it with inline
 
 Everything lives in one SQLite file on your machine. Nothing is uploaded.
 
+![A hashline session: capture, list, keyword search, then a semantic search
+finding a note that shares no characters with the query](docs/cli-session.png)
+
 - **One line in, one note out.** No titles, no folders, no editor.
 - **Tags come from the text.** Write `#sqlite` in the note and it is tagged.
 - **Search that works in Japanese.** The FTS5 index uses the trigram
@@ -50,41 +53,11 @@ uv run hashline import ~/notes --mode heading --tag imported
 Every command takes `--db PATH`. Without it the database is `$HASHLINE_DB`,
 and failing that `~/.local/share/hashline/hashline.db`.
 
-## Web UI
+## Working with notes
 
-```bash
-uv run uvicorn hashline.web.app:app --reload
-# http://127.0.0.1:8000
-```
-
-Capture, tag filtering and search-as-you-type over the same database the CLI
-uses; it honours `$HASHLINE_DB`. HTMX is vendored under
-`src/hashline/web/static/`, so the page needs no CDN and works offline.
-
-### Feature Parity
-
-The Web UI implements equivalent functionality to the CLI commands:
-
-| CLI command | Web UI route |
-|---|---|
-| `hashline list` | `GET /` |
-| `hashline add` | `POST /notes` |
-| `hashline rm` | `POST /notes/{id}/delete` |
-| `hashline reply` | `POST /notes` (with parent_id) |
-| `hashline thread` | `GET /` (with root filter) |
-| `hashline search` | `GET /` (with q) |
-| `hashline pin` | `POST /context/pin`, `POST /context/clear_tags` |
-| `hashline read` | `POST /context/read`, `POST /context/clear_read` |
-| `hashline bib list` | `GET /bib` |
-| `hashline bib show` | `GET /bib/{citekey}` |
-| `hashline import` | `POST /import` (also supports browser uploads) |
-| `hashline bib import` | `POST /bib/import` (also supports browser uploads) |
-| `hashline export` | `GET /export`, `GET /export/download` |
-| `hashline index`, `search --semantic` | *CLI only* |
-
-One deliberate difference: `hashline read start` replaces the pinned tags, while `POST /context/read` adds the reading tag to them. The context strip shows the pinned tags and the pinned work side by side with a clear button each, so starting a read there should not empty the column next to it.
-
-> **Security Note:** The `path` field in both `/import` and `/bib/import` reads files directly from the local filesystem on the machine running the server. Do not expose this web app to a network. All state-changing routes also reject a POST whose `Origin` header does not match the server's own host, so a form on another site left open in the same browser cannot delete notes or replace the bibliography; a request with no `Origin` header (curl, the CLI) is still allowed through.
+Beyond the commands in the quick start, the CLI can bulk-import files, run a
+citation-aware reading workflow, keep tags pinned across captures, and build
+reply threads.
 
 ### `import`
 
@@ -185,7 +158,7 @@ Things worth knowing:
 - `export` promotes a note whose parent is outside the selection to a root, so filtering never makes replies disappear.
 - There is no reparenting: restructuring means deleting and re-entering.
 
-### Things worth knowing about search
+### Search
 
 - Results are ranked by BM25 and printed best-first. The score shown is
   `-bm25()`, so **higher is better**. On a very small database the score can
@@ -198,6 +171,102 @@ Things worth knowing:
 - `--semantic` blends in a ranking by meaning; see
   [Semantic search](#semantic-search). It needs the `ml` extra and a
   `hashline index` pass, and says so when either is missing.
+
+## Web UI
+
+```bash
+uv run uvicorn hashline.web.app:app --reload
+# http://127.0.0.1:8000
+```
+
+![The hashline web UI: the pinned-context strip, the composer, tag chips, and
+a timeline with a reply nested under its parent](docs/web-ui.png)
+
+Capture, tag filtering and search-as-you-type over the same database the CLI
+uses; it honours `$HASHLINE_DB`. HTMX is vendored under
+`src/hashline/web/static/`, so the page needs no CDN and works offline. The
+vendored build is htmx 2.0.4 (`htmx.min.js`, ~50 KB), licensed 0BSD, which
+carries no attribution requirement — update the file by hand when a new
+version is needed.
+
+### Feature Parity
+
+The Web UI implements equivalent functionality to the CLI commands:
+
+| CLI command | Web UI route |
+|---|---|
+| `hashline list` | `GET /` |
+| `hashline add` | `POST /notes` |
+| `hashline rm` | `POST /notes/{id}/delete` |
+| `hashline reply` | `POST /notes` (with parent_id) |
+| `hashline thread` | `GET /` (with root filter) |
+| `hashline search` | `GET /` (with q) |
+| `hashline pin` | `POST /context/pin`, `POST /context/clear_tags` |
+| `hashline read` | `POST /context/read`, `POST /context/clear_read` |
+| `hashline bib list` | `GET /bib` |
+| `hashline bib show` | `GET /bib/{citekey}` |
+| `hashline import` | `POST /import` (also supports browser uploads) |
+| `hashline bib import` | `POST /bib/import` (also supports browser uploads) |
+| `hashline export` | `GET /export`, `GET /export/download` |
+| `hashline index`, `search --semantic` | *CLI only* |
+
+One deliberate difference: `hashline read start` replaces the pinned tags, while `POST /context/read` adds the reading tag to them. The context strip shows the pinned tags and the pinned work side by side with a clear button each, so starting a read there should not empty the column next to it.
+
+> **Security Note:** The `path` field in both `/import` and `/bib/import` reads files directly from the local filesystem on the machine running the server. Do not expose this web app to a network. All state-changing routes also reject a POST whose `Origin` header does not match the server's own host, so a form on another site left open in the same browser cannot delete notes or replace the bibliography; a request with no `Origin` header (curl, the CLI) is still allowed through.
+
+## Semantic search
+
+Retrieve notes by meaning, not only by the characters in them. Optional: the
+app installs, starts and works fully without it.
+
+```bash
+uv sync --extra ml            # torch (CPU build) and sentence-transformers
+uv run hashline index         # embed every note not embedded yet
+uv run hashline search 眠れない --semantic
+```
+
+```
+0.0164      5  2026-08-09 22:45  昨日は寝不足で頭が回らなかった #日記  [日記]
+0.0161      3  2026-08-09 22:45  朝の散歩を習慣にしたい #日記          [日記]
+```
+
+Neither note contains 眠れない, so `hashline search 眠れない` on its own finds
+nothing — which is the last pair of commands in the session at the top of this
+file.
+
+`hashline index` walks `notes_without_embedding`, so re-running it costs
+nothing; `--rebuild` re-embeds everything and `--limit` stops early. A search
+that finds notes added since the last index says how many are missing rather
+than leaving a short result list as the only clue.
+
+### How the two rankings are combined
+
+BM25 and cosine similarity are on unrelated scales, so the **ranks** are fused,
+not the scores: each list contributes `1 / (60 + rank)` per note
+(reciprocal rank fusion). No normalization constant to tune, and a third
+ranker could be added without revisiting the first two. Both sides contribute
+their top 100 regardless of `--limit`, so a note that both rankers place 25th
+is not beaten by one that a single ranker happened to put 20th.
+
+### How vectors are stored
+
+The `embeddings` table has been in the schema since the first release, so this needed no migration and no reimport.
+
+- Little-endian `float32`, fixed explicitly, so a `.db` file stays portable between machines.
+- `dim` lives in its own column, not a header inside the BLOB.
+- Vectors are L2-normalized on write.
+- `embeddings.model` records the prefix convention (`intfloat/multilingual-e5-small+query`), not just the model name — e5-small is 384-wide exactly like the MiniLM model it replaced, so no dimension check could catch the two being mixed.
+
+That prefix is e5's: both the note and the search for it are embedded with
+`query: `, because finding notes that mean the same thing as a phrase is a
+symmetric task.
+
+### What runs where
+
+- `ml/search.py` is pure numpy and imports no model runtime.
+- `ml/embed.py` imports the backend inside functions.
+- `ml/protocols.py` defines the `Embedder` protocol both sides share.
+- The CLI imports both only inside the two commands that need them; `--semantic` is still CLI-only, not in the web UI.
 
 ## Upgrading
 
@@ -254,79 +323,6 @@ tests/
 
 The core (`models`, `tags`, `store`, `importer`, `bib`, `outline`) is plain Python
 over the standard library plus numpy. The CLI and the web UI are thin adapters over it.
-
-## Semantic search
-
-Retrieve notes by meaning, not only by the characters in them. Optional: the
-app installs, starts and works fully without it.
-
-```bash
-uv sync --extra ml            # torch (CPU build) and sentence-transformers
-uv run hashline index         # embed every note not embedded yet
-uv run hashline search 睡眠 --semantic
-```
-
-```
-0.0164      1  2026-08-09 22:18  昨日は寝不足で、朝から頭が回らなかった  [日記]
-0.0161      3  2026-08-09 22:18  夜ふかしをやめたい                      [日記]
-```
-
-Neither note contains 睡眠, so `hashline search 睡眠` on its own finds nothing.
-
-`hashline index` walks `notes_without_embedding`, so re-running it costs
-nothing; `--rebuild` re-embeds everything and `--limit` stops early. A search
-that finds notes added since the last index says how many are missing rather
-than leaving a short result list as the only clue.
-
-### How the two rankings are combined
-
-BM25 and cosine similarity are on unrelated scales, so the **ranks** are fused,
-not the scores: each list contributes `1 / (60 + rank)` per note
-(reciprocal rank fusion). No normalization constant to tune, and a third
-ranker could be added without revisiting the first two. Both sides contribute
-their top 100 regardless of `--limit`, so a note that both rankers place 25th
-is not beaten by one that a single ranker happened to put 20th.
-
-### How vectors are stored
-
-The `embeddings` table has been in the schema from the first release —
-`(note_id, model)` keyed so several models coexist — so this needed **no
-migration and no reimport**.
-
-- **`float32`, little-endian, fixed explicitly.** A `.db` file is portable
-  between machines, so byte order is part of the format rather than a property
-  of whoever wrote the row. 384 dimensions is 1.5 KB per note.
-- **`dim` lives in its column, not in a header inside the BLOB.** The row
-  already records it; a second copy would be a second thing that can disagree.
-  `unpack_vector(blob, expected_dim=...)` cross-checks the two.
-- **Vectors are L2-normalized on write,** so a search is one matrix product.
-- **`embeddings.model` records the prefix convention, not just the model
-  name** (`intfloat/multilingual-e5-small+query`). e5 returns different vectors
-  for the same text under a different prefix, and e5-small is 384-wide exactly
-  like the English MiniLM model it replaced — so no dimension check could catch
-  vectors from the two being mixed. Only this key can, and changing either the
-  model or the prefix leaves the old rows sitting under their own key,
-  unread and unharmed.
-
-Both sides — the note and the search for it — are embedded with the `query: `
-prefix. Finding notes that mean the same thing as a phrase is a symmetric task,
-which is the case the e5 authors give for one prefix throughout.
-
-### What runs where
-
-`ml/search.py` is pure numpy: arrays and rank lists in, ranked ids out. It
-imports neither torch nor sentence-transformers, and its tests are part of the
-default suite. `ml/embed.py` imports the backend inside functions, so the
-module costs nothing to import and `is_available()` can report whether semantic
-search can run at all. `ml/protocols.py` is the one-method `Embedder` protocol
-both sides agree on, which is what lets the CLI tests inject a fake and run in
-CI without downloading anything.
-
-The CLI imports all of this inside the two commands that need it: numpy alone
-takes 86 ms against 38 ms for the whole CLI, and `hashline add` should not pay
-that.
-
-Not yet in the web UI — `--semantic` is CLI-only for now.
 
 ## License
 
