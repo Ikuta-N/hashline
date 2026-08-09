@@ -14,7 +14,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Final
 
-from hashline.models import Note, NoteDraft, SearchHit, TagCount
+from hashline.models import BibEntry, Note, NoteDraft, SearchHit, TagCount
 from hashline.tags import extract_tags, normalize_tag
 
 SCHEMA_VERSION: Final = 2
@@ -451,3 +451,91 @@ class Store:
             (note_id,),
         ).fetchall()
         return [row["name"] for row in rows]
+
+    # --- bibliography ----------------------------------------------------
+
+    def upsert_bib_entries(self, entries: Iterable[BibEntry]) -> int:
+        """Insert or update bibliography entries.
+
+        Uses ``ON CONFLICT(citekey) DO UPDATE`` so re-importing a library
+        refreshes rather than fails.  Returns how many entries were written.
+        """
+        stamp = _to_text(_utc_now())
+        count = 0
+        with self._conn:
+            for entry in entries:
+                self._conn.execute(
+                    "INSERT INTO bib_entries "
+                    "(citekey, tag, entry_type, title, author, year, doi, "
+                    "raw, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(citekey) DO UPDATE SET "
+                    "tag = excluded.tag, "
+                    "entry_type = excluded.entry_type, "
+                    "title = excluded.title, "
+                    "author = excluded.author, "
+                    "year = excluded.year, "
+                    "doi = excluded.doi, "
+                    "raw = excluded.raw, "
+                    "updated_at = excluded.updated_at",
+                    (
+                        entry.citekey,
+                        entry.tag,
+                        entry.entry_type,
+                        entry.title,
+                        entry.author,
+                        entry.year,
+                        entry.doi,
+                        entry.raw,
+                        stamp,
+                    ),
+                )
+                count += 1
+        return count
+
+    def get_bib_entry(self, citekey: str) -> BibEntry | None:
+        """Return a single bibliography entry, or ``None`` if unknown."""
+        row = self._conn.execute(
+            "SELECT citekey, tag, entry_type, title, author, year, doi, raw "
+            "FROM bib_entries WHERE citekey = ?",
+            (citekey,),
+        ).fetchone()
+        if row is None:
+            return None
+        return BibEntry(
+            citekey=row["citekey"],
+            tag=row["tag"],
+            entry_type=row["entry_type"],
+            title=row["title"],
+            author=row["author"],
+            year=row["year"],
+            doi=row["doi"],
+            raw=row["raw"],
+        )
+
+    def list_bib_entries(
+        self, *, limit: int | None = None
+    ) -> list[BibEntry]:
+        """Return all bibliography entries, ordered by citekey."""
+        sql = (
+            "SELECT citekey, tag, entry_type, title, author, year, doi, raw "
+            "FROM bib_entries ORDER BY citekey"
+        )
+        params: tuple[int, ...] = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (limit,)
+        rows = self._conn.execute(sql, params).fetchall()
+        return [
+            BibEntry(
+                citekey=row["citekey"],
+                tag=row["tag"],
+                entry_type=row["entry_type"],
+                title=row["title"],
+                author=row["author"],
+                year=row["year"],
+                doi=row["doi"],
+                raw=row["raw"],
+            )
+            for row in rows
+        ]
