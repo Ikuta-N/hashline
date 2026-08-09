@@ -25,3 +25,6 @@ figs/*.pdf
 
 # local file
 *.local.json
+
+# scratch space for hand-off prompts; contents are not part of the project
+tmp/
