@@ -59,3 +59,21 @@ class NoteDraft:
     created_at: datetime | None = None
     source: str | None = None
     extra_tags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class BibEntry:
+    """A parsed BibTeX entry.
+
+    ``tag`` is the citekey normalized into a form that ``tags.normalize_tag``
+    accepts, so it can be used as an inline ``#tag``.
+    """
+
+    citekey: str
+    tag: str
+    entry_type: str
+    title: str | None = None
+    author: str | None = None
+    year: str | None = None
+    doi: str | None = None
+    raw: str = ""
