@@ -540,12 +540,53 @@ class TestCreateNote:
             "input's name"
         )
 
+    def test_composer_body_is_a_textarea_with_a_ctrl_enter_submit_handler(
+        self, client: TestClient
+    ) -> None:
+        # A plain <input type=text name=body> can never hold a line break,
+        # so Enter has to become a newline and Ctrl/Cmd+Enter has to submit
+        # instead. requestSubmit() is required here, not form.submit(),
+        # because only requestSubmit() fires the cancelable submit event
+        # htmx listens for.
+        body = client.get("/").text
+        textarea = re.search(r"<textarea\b[^>]*name=\"body\"[^>]*>", body)
+        assert textarea is not None, "composer body field is not a textarea"
+        markup = textarea.group(0)
+        assert "onkeydown" in markup, "composer textarea has no keydown handler"
+        assert "ctrlKey" in markup and "metaKey" in markup, (
+            "composer textarea's keydown handler does not check for "
+            "Ctrl/Cmd+Enter"
+        )
+        assert "requestSubmit()" in markup, (
+            "composer textarea must call requestSubmit(), not submit(), so "
+            "htmx's submit listener fires"
+        )
+        assert 'autofocus' in markup
+        assert "Ctrl+Enter" in markup or "Ctrl" in markup
+
 
 class TestReply:
     def test_renders_reply_fragment(self, seeded: TestClient) -> None:
         response = seeded.get("/notes/1/reply")
         assert response.status_code == 200
         assert 'name="parent_id" value="1"' in response.text
+
+    def test_reply_body_is_a_textarea_with_a_ctrl_enter_submit_handler(
+        self, seeded: TestClient
+    ) -> None:
+        body = seeded.get("/notes/1/reply").text
+        textarea = re.search(r"<textarea\b[^>]*name=\"body\"[^>]*>", body)
+        assert textarea is not None, "reply body field is not a textarea"
+        markup = textarea.group(0)
+        assert "onkeydown" in markup, "reply textarea has no keydown handler"
+        assert "ctrlKey" in markup and "metaKey" in markup, (
+            "reply textarea's keydown handler does not check for "
+            "Ctrl/Cmd+Enter"
+        )
+        assert "requestSubmit()" in markup, (
+            "reply textarea must call requestSubmit(), not submit(), so "
+            "htmx's submit listener fires"
+        )
 
     def test_reply_fragment_carries_citekey_roots_only_and_limit(
         self, client: TestClient, tmp_path: Path
