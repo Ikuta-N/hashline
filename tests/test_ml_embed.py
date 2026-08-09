@@ -11,6 +11,8 @@ import pytest
 
 from hashline.ml.embed import (
     DEFAULT_MODEL,
+    EMBEDDING_KEY,
+    QUERY_PREFIX,
     MlExtraNotInstalled,
     embed_texts,
     is_available,
@@ -37,6 +39,23 @@ class TestIsAvailable:
             return
         with pytest.raises(MlExtraNotInstalled, match="ml"):
             load_model()
+
+
+class TestEmbeddingKey:
+    """What goes in embeddings.model has to identify the prefix too.
+
+    e5 returns different vectors for the same text under a different prefix,
+    and e5-small is 384-wide exactly like the MiniLM model it replaced -- so
+    no dimension check could ever catch vectors from the two being mixed.
+    Only this key can.
+    """
+
+    def test_names_the_model(self) -> None:
+        assert DEFAULT_MODEL in EMBEDDING_KEY
+
+    def test_records_the_prefix_convention(self) -> None:
+        assert EMBEDDING_KEY != DEFAULT_MODEL
+        assert EMBEDDING_KEY.endswith(QUERY_PREFIX.strip().rstrip(":"))
 
 
 class TestVectorCodec:
@@ -141,7 +160,25 @@ class TestEmbedTexts:
         result = embed_texts(["ab", "abcd"], model=FakeEncoder())
         assert result.shape == (2, 2)
         assert result.dtype == np.float32
-        assert result[1][0] == 4.0
+        assert result[1][0] == len(QUERY_PREFIX) + 4
+
+    def test_every_text_reaches_the_model_prefixed(self) -> None:
+        """e5 is trained on a prefix that names the role of the text.
+
+        Both sides get "query: ": the task is symmetric, so a note and a
+        search for it must be encoded identically or their vectors are not
+        comparable. Asserting it here means the convention is covered by the
+        default suite, without a model.
+        """
+        seen: list[str] = []
+
+        class RecordingEncoder:
+            def encode(self, texts: list[str]) -> np.ndarray:
+                seen.extend(texts)
+                return np.zeros((len(texts), 2))
+
+        embed_texts(["寝不足", "sleep"], model=RecordingEncoder())
+        assert seen == ["query: 寝不足", "query: sleep"]
 
     def test_an_embedder_needs_nothing_beyond_the_protocol(self) -> None:
         """The one method in Embedder is the whole contract.
@@ -156,7 +193,7 @@ class TestEmbedTexts:
                 return np.array([[float(len(text))] for text in texts])
 
         embedder: Embedder = MinimalEmbedder()
-        assert embed_texts(["abc"], model=embedder)[0][0] == 3.0
+        assert embed_texts(["abc"], model=embedder)[0][0] == len(QUERY_PREFIX) + 3
 
 
 @pytest.mark.slow
@@ -183,3 +220,20 @@ class TestAgainstARealModel:
     def test_a_vector_survives_the_codec(self) -> None:
         vector = embed_texts(["round trip"])[0]
         assert np.allclose(unpack_vector(pack_vector(vector)), vector)
+
+    def test_a_japanese_query_finds_a_japanese_note_by_meaning(self) -> None:
+        """The reason for a multilingual model, in one assertion.
+
+        Neither the query nor the matching note shares a character with the
+        other, so the trigram FTS5 index cannot connect them. This is the
+        retrieval semantic search exists to add.
+        """
+        model = load_model()
+        notes = [
+            "SQLite の全文検索は BM25 で並べ替える",
+            "昨日は寝不足で、朝から頭が回らなかった",
+        ]
+        matrix = embed_texts(notes, model=model)
+        query = embed_texts(["睡眠"], model=model)[0]
+        ranked = rank_by_similarity(query, [0, 1], matrix)
+        assert ranked[0][0] == 1

@@ -17,8 +17,25 @@ from numpy.typing import NDArray
 
 from hashline.ml.protocols import Embedder
 
-#: Small, multilingual-tolerant and quick to download. Overridable per call.
-DEFAULT_MODEL: Final = "sentence-transformers/all-MiniLM-L6-v2"
+#: Small, genuinely multilingual, 384 dimensions. Overridable per call.
+DEFAULT_MODEL: Final = "intfloat/multilingual-e5-small"
+
+#: e5 models are trained to be given a prefix naming the role of the text.
+#:
+#: Both sides get "query: " here rather than the query/passage pair, because
+#: finding notes that mean the same thing as a phrase is a symmetric task --
+#: which the e5 authors give as the case for using one prefix throughout. It
+#: also means one function embeds both a note and a search for it.
+QUERY_PREFIX: Final = "query: "
+
+#: What goes in the embeddings.model column.
+#:
+#: Not just the model name: e5 returns different vectors for the same text
+#: under a different prefix, so the prefix is part of what produced the
+#: vector. Changing either changes this key, old rows keep their own, and the
+#: two never mix. A dimension check could not do this job -- e5-small and the
+#: MiniLM model it replaced are both 384-wide.
+EMBEDDING_KEY: Final = f"{DEFAULT_MODEL}+query"
 
 #: In-memory element type. float32 is what sentence-transformers emits, and
 #: 4 bytes per dimension is 1.5 KB for a 384-dim vector. float64 would double
@@ -90,13 +107,17 @@ def embed_texts(
 ) -> NDArray[np.float32]:
     """Embed ``texts`` into one row each.
 
+    Each text is prefixed with :data:`QUERY_PREFIX` before it reaches the
+    model, so notes and searches are encoded the same way and can be compared
+    directly.
+
     Pass ``model`` to reuse a loaded model across batches. Returns a
     ``(len(texts), dim)`` float32 array; an empty input gives ``(0, 0)``.
     """
     if not texts:
         return np.empty((0, 0), dtype=_DTYPE)
     encoder = model if model is not None else load_model(model_name)
-    encoded = encoder.encode(list(texts))
+    encoded = encoder.encode([QUERY_PREFIX + text for text in texts])
     return np.asarray(encoded, dtype=_DTYPE).reshape(len(texts), -1)
 
 
