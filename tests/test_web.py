@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from hashline.models import BibEntry, Context
 from hashline.store import Store
 from hashline.web.app import app
 
@@ -98,6 +99,75 @@ class TestTimelineFragment:
         assert 'style="margin-left: 0px"' in body
         assert "reply" in body
 
+
+class TestFilters:
+    def test_filter_by_citekey(self, client: TestClient, tmp_path: Path) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        title="Title",
+                        author="",
+                        year="",
+                        tag="smith2020",
+                        entry_type="",
+                    )
+                ]
+            )
+            store.set_context(Context(citekey="smith2020", tags=()))
+            store.add_note_with_context("about smith")
+            store.add_note("unrelated")
+        body = client.get("/notes", params={"citekey": "smith2020"}).text
+        assert "about smith" in body
+        assert "unrelated" not in body
+
+    def test_filter_by_tag_and_citekey(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        title="Title",
+                        author="",
+                        year="",
+                        tag="smith2020",
+                        entry_type="",
+                    )
+                ]
+            )
+            store.set_context(Context(citekey="smith2020", tags=()))
+            store.add_note_with_context("about smith #tag")
+            store.add_note_with_context("about smith")
+        body = client.get("/notes", params={"citekey": "smith2020", "tag": "tag"}).text
+        assert "about smith #tag" in body
+        assert "about smith</p>" not in body
+
+    def test_roots_only_hides_replies(self, client: TestClient, tmp_path: Path) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("parent")
+            store.add_note("reply note", parent_id=1)
+        body = client.get("/notes", params={"roots_only": "true"}).text
+        assert "parent" in body
+        assert "reply note" not in body
+
+    def test_limit_is_honoured(self, client: TestClient, tmp_path: Path) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            for i in range(5):
+                store.add_note(f"note {i}")
+        body = client.get("/notes", params={"limit": 2}).text
+        assert "note 4" in body
+        assert "note 3" in body
+        assert "note 2" not in body
+
+    def test_filters_survive_search(self, client: TestClient, tmp_path: Path) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("test")
+        body = client.get("/", params={"citekey": "testkey", "roots_only": "true"}).text
+        assert 'name="citekey" value="testkey"' in body
+        assert 'name="roots_only" value="true" checked' in body
 
 class TestCreateNote:
     def test_stores_the_note_and_returns_the_timeline(self, client: TestClient) -> None:

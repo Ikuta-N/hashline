@@ -41,36 +41,60 @@ def index(
     store: StoreDep,
     q: str = "",
     tag: str = "",
+    citekey: str = "",
+    roots_only: bool = False,
+    limit: int = 50,
 ) -> HTMLResponse:
-    """The whole page: composer, tag sidebar and timeline."""
+    # tags_for_note needs the db, do it before rendering
+    notes = _timeline(
+        store, q=q, tag=tag, citekey=citekey, roots_only=roots_only, limit=limit
+    )
+
     context_data = {
         "current_page": "notes",
+        "notes": notes,
         "q": q,
         "tag": tag,
+        "citekey": citekey,
+        "roots_only": roots_only,
+        "limit": limit,
         "tags": store.list_tags(limit=30),
-        "notes": _timeline(store, q=q, tag=tag),
         "total": store.count_notes(),
     }
+
     context_data.update(_context_data(store))
+
     return templates.TemplateResponse(
         request=request,
         name="index.html",
         context=context_data,
     )
 
-
 @app.get("/notes", response_class=HTMLResponse)
-def notes(
+def notes_fragment(
     request: Request,
     store: StoreDep,
     q: str = "",
     tag: str = "",
+    citekey: str = "",
+    roots_only: bool = False,
+    limit: int = 50,
 ) -> HTMLResponse:
-    """Just the timeline, for HTMX to swap in."""
+    notes = _timeline(
+        store, q=q, tag=tag, citekey=citekey, roots_only=roots_only, limit=limit
+    )
+
     return templates.TemplateResponse(
         request=request,
         name="_timeline.html",
-        context={"notes": _timeline(store, q=q, tag=tag), "q": q, "tag": tag},
+        context={
+            "notes": notes,
+            "q": q,
+            "tag": tag,
+            "citekey": citekey,
+            "roots_only": roots_only,
+            "limit": limit,
+        },
     )
 
 
@@ -208,16 +232,25 @@ def delete_note(
     )
 
 def _timeline(
-    store: Store, *, q: str, tag: str, limit: int = 50
+    store: Store,
+    *,
+    q: str,
+    tag: str,
+    citekey: str = "",
+    roots_only: bool = False,
+    limit: int = 50,
 ) -> list[tuple[Note, list[str], int]]:
     """Notes plus their tags, either searched (flat) or listed (nested)."""
     filter_tag = tag or None
+    filter_citekey = citekey or None
     if q.strip():
         # Ranked list and tree are different things -- render search results FLAT.
         found = [hit.note for hit in store.search_notes(q, tag=filter_tag, limit=limit)]
         return [(note, store.tags_for_note(note.id), 0) for note in found]
         
-    found = store.list_notes(tag=filter_tag, limit=limit)
+    found = store.list_notes(
+        tag=filter_tag, citekey=filter_citekey, roots_only=roots_only, limit=limit
+    )
     
     def flatten(
         roots: Sequence[OutlineNode], depth: int = 0

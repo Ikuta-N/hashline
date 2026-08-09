@@ -17,20 +17,38 @@
     <button type="submit">add</button>
   </form>
 
-  <form class="composer" role="search">
+  <form class="composer" role="search" id="search-form">
+    <!-- search ignores citekey and roots_only; disable the toggle when searching to make this clear -->
     <input type="text" name="q" value="{{ q }}" placeholder="検索"
+           oninput="this.form.roots_only.disabled = !!this.value.trim()"
            hx-get="/notes"
            hx-target="#timeline"
            hx-swap="outerHTML"
            hx-trigger="input changed delay:250ms, search"
-           hx-include="[name='tag']">
+           hx-include="[name='tag'], [name='citekey'], [name='roots_only']">
     <input type="hidden" name="tag" value="{{ tag }}">
+    <input type="hidden" name="citekey" value="{{ citekey }}">
+    <label title="Search ignores roots_only">
+      <input type="checkbox" name="roots_only" value="true" {% if roots_only %}checked{% endif %} {% if q %}disabled{% endif %}
+             hx-get="/notes"
+             hx-target="#timeline"
+             hx-swap="outerHTML"
+             hx-include="[name='q'], [name='tag'], [name='citekey']">
+      hide replies
+    </label>
   </form>
 
+  {% if citekey %}
+  <nav class="citekey-filter">
+    <!-- search ignores citekey; the chip remains but its filter effect is inert while q is set -->
+    <a href="/?{% if tag %}tag={{ tag | urlencode }}{% endif %}{% if q %}&q={{ q | urlencode }}{% endif %}{% if roots_only %}&roots_only={{ roots_only }}{% endif %}" class="on">citekey: {{ citekey }} ✕</a>
+  </nav>
+  {% endif %}
+
   <nav class="tags">
-    <a href="/{% if q %}?q={{ q | urlencode }}{% endif %}" class="{{ 'on' if not tag }}">all</a>
+    <a href="/?{% if q %}q={{ q | urlencode }}&{% endif %}{% if citekey %}citekey={{ citekey | urlencode }}&{% endif %}{% if roots_only %}roots_only=true{% endif %}" class="{{ 'on' if not tag }}">all</a>
     {% for entry in tags %}
-      <a href="/?tag={{ entry.name | urlencode }}{% if q %}&q={{ q | urlencode }}{% endif %}"
+      <a href="/?tag={{ entry.name | urlencode }}{% if q %}&q={{ q | urlencode }}{% endif %}{% if citekey %}&citekey={{ citekey | urlencode }}{% endif %}{% if roots_only %}&roots_only=true{% endif %}"
          class="{{ 'on' if entry.name == tag }}">#{{ entry.name }} {{ entry.count }}</a>
     {% endfor %}
   </nav>
