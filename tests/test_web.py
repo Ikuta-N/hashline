@@ -839,6 +839,16 @@ class TestThreadView:
         assert "all notes" not in body
         assert 'hx-get="/notes"' not in body
 
+    def test_thread_view_has_an_export_this_thread_link(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("root")
+        response = client.get("/notes/1/thread")
+        assert response.status_code == 200
+        assert 'href="/export?root=1"' in response.text
+        assert "export this thread" in response.text
+
 
 class TestDeleteNote:
     def test_deleting_leaf_works_and_reports_count(
@@ -1649,6 +1659,39 @@ class TestExport:
         assert 'class="error"' in response.text
         # The reader is looking at a form, not a terminal.
         assert "--root" not in response.text
+
+    def test_export_form_no_longer_offers_a_free_text_root_box(
+        self, client: TestClient
+    ) -> None:
+        # Typing a note id by hand is what this replaces -- the thread view
+        # is where a user already knows which thread they want.
+        body = client.get("/export").text
+        assert '<input type="number" name="root"' not in body
+        assert "Thread Root ID" not in body
+
+    def test_export_with_a_root_renders_it_as_a_read_only_chip(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            parent = store.add_note("parent")
+            store.add_note("child", parent_id=parent.id)
+        response = client.get("/export", params={"root": parent.id})
+        assert response.status_code == 200
+        assert f"thread #{parent.id}" in response.text
+        # Still carried into the download form.
+        assert f'name="root" value="{parent.id}"' in response.text
+
+    def test_export_chip_dismiss_link_drops_root(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            parent = store.add_note("parent")
+        body = client.get("/export", params={"root": parent.id}).text
+        link = re.search(r'<a href="([^"]*)"[^>]*>&#10005;</a>', body)
+        assert link is not None, "no dismiss link found next to the chip"
+        assert "root=" not in link.group(1), (
+            "the chip's dismiss link still carries the root filter"
+        )
 
     def test_export_download_success(self, seeded: TestClient) -> None:
         response = seeded.get("/export/download", params={"tag": "sqlite"})

@@ -14,10 +14,16 @@
           <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Citekey</label>
           <input type="text" name="citekey" value="{{ citekey }}" placeholder="citekey" style="padding: .4rem; width: 120px;">
         </div>
+        {% if root %}
         <div>
-          <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Thread Root ID</label>
-          <input type="number" name="root" value="{{ root }}" placeholder="id" style="padding: .4rem; width: 120px;">
+          <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Thread</label>
+          <span style="display: inline-flex; align-items: center; gap: .4rem; padding: .4rem .6rem; background: var(--bg); border: 1px solid var(--line); border-radius: .5rem;">
+            thread #{{ root }}
+            <a href="/export?tag={{ tag | urlencode }}&citekey={{ citekey | urlencode }}" style="text-decoration: none;" title="drop this thread filter">&#10005;</a>
+          </span>
+          <input type="hidden" name="root" value="{{ root }}">
         </div>
+        {% endif %}
       </div>
       <noscript>
         <button type="submit" style="padding: .4rem 1rem;">Preview</button>
