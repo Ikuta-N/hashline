@@ -6,9 +6,10 @@ formatting, and holds no note logic of its own.
 
 import re
 from collections.abc import Sequence
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Final, cast
+from typing import TYPE_CHECKING, Annotated, Final, cast
 
 import typer
 
@@ -19,6 +20,9 @@ from hashline.models import DEFAULT_READING_TAG, BibEntry, Context, Note
 from hashline.outline import build_tree, render_markdown
 from hashline.store import NoteHasReplies, Store, default_db_path
 from hashline.tags import normalize_tag
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 _BODY_WIDTH: Final = 90
 _WHITESPACE_RE: Final = re.compile(r"\s+")
@@ -321,6 +325,134 @@ def export(
         out.write_text(markdown, encoding="utf-8")
     else:
         typer.echo(markdown, nl=False)
+
+
+@app.command()
+def stats(
+    ctx: typer.Context,
+    activity_flag: Annotated[
+        bool, typer.Option("--activity", help="Notes per period.")
+    ] = False,
+    tags_flag: Annotated[
+        bool,
+        typer.Option("--tags", help="Note counts per period, for the top tags."),
+    ] = False,
+    reading_flag: Annotated[
+        bool,
+        typer.Option("--reading", help="One row per work that has notes."),
+    ] = False,
+    threads_flag: Annotated[
+        bool, typer.Option("--threads", help="One row per thread root.")
+    ] = False,
+    freq: Annotated[
+        str,
+        typer.Option(
+            "--freq", help="Resample frequency for --activity/--tags: D, W or ME."
+        ),
+    ] = "D",
+    top: Annotated[
+        int, typer.Option("--top", help="How many tags to keep, with --tags.")
+    ] = 10,
+    csv: Annotated[
+        Path | None,
+        typer.Option("--csv", help="Also write the selected frame here as CSV."),
+    ] = None,
+) -> None:
+    """Aggregate statistics computed by ``hashline.analytics``.
+
+    With no selector, prints the overview: note count, tag count, work
+    count, and the first/last note dates. Exactly one of --activity,
+    --tags, --reading, --threads may be given; two at once is a
+    `typer.BadParameter`, not a silent pick-the-first.
+
+    --csv writes the selected frame to PATH, in addition to printing it.
+    With no selector, --csv writes the overview as a one-row frame (its
+    dict keys as columns) rather than refusing.
+    """
+    chosen = [
+        name
+        for name, flag in (
+            ("--activity", activity_flag),
+            ("--tags", tags_flag),
+            ("--reading", reading_flag),
+            ("--threads", threads_flag),
+        )
+        if flag
+    ]
+    if len(chosen) > 1:
+        raise typer.BadParameter(
+            "only one of --activity, --tags, --reading, --threads may be given"
+        )
+
+    import pandas as pd
+
+    from hashline import analytics
+
+    with _open(ctx) as store:
+        if activity_flag:
+            try:
+                df = analytics.activity(store, freq=freq)
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+        elif tags_flag:
+            try:
+                df = analytics.tag_trend(store, freq=freq, top=top)
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+        elif reading_flag:
+            df = analytics.reading_summary(store)
+        elif threads_flag:
+            df = analytics.thread_summary(store)
+        else:
+            overview = analytics.overview(store)
+            df = pd.DataFrame([overview])
+
+    if csv is not None:
+        # UTC on the way to a file: a CSV is read by a program, and the
+        # timestamps the store keeps are the unambiguous ones.
+        df.to_csv(csv, index=bool(chosen))
+
+    if chosen:
+        typer.echo(_in_local_time(df).to_string())
+    else:
+        typer.echo(_format_overview(overview))
+
+
+def _in_local_time(frame: "pd.DataFrame") -> "pd.DataFrame":
+    """Move every timestamp in a frame to the reader's timezone.
+
+    The overview and `hashline list` already print local time, so leaving the
+    frames in UTC made one command report the same note at two different hours
+    depending on which flag you passed.
+    """
+    here = datetime.now().astimezone().tzinfo
+    localised = frame.copy()
+    # The index of activity/tag_trend is a bucket, not an instant. Shifting it
+    # would label a UTC day "09:00" for a reader nine hours ahead, which says
+    # something the data does not. Only the timestamps of real events move.
+    for column in localised.columns:
+        values = localised[column]
+        if values.dtype.kind == "M" and getattr(values.dt, "tz", None) is not None:
+            localised[column] = values.dt.tz_convert(here).dt.tz_localize(None)
+    return localised
+
+
+def _format_overview(overview: dict[str, object]) -> str:
+    lines = [
+        f"notes: {overview['note_count']}",
+        f"tags:  {overview['tag_count']}",
+        f"works: {overview['work_count']}",
+    ]
+    first_at = overview["first_note_at"]
+    if first_at is None:
+        lines.append("no notes yet")
+    else:
+        last_at = cast(datetime, overview["last_note_at"])
+        first_str = cast(datetime, first_at).astimezone().strftime("%Y-%m-%d %H:%M")
+        last_str = last_at.astimezone().strftime("%Y-%m-%d %H:%M")
+        lines.append(f"first note: {first_str}")
+        lines.append(f"last note:  {last_str}")
+    return "\n".join(lines)
 
 
 @app.command()

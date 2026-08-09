@@ -603,6 +603,20 @@ class Store:
         ).fetchall()
         return [row["name"] for row in rows]
 
+    def iter_note_tags(self) -> Iterator[tuple[int, str]]:
+        """Yield every ``(note_id, tag name)`` pair, ordered by note id then tag.
+
+        One SELECT for the whole library, so a caller building a note-to-tags
+        mapping does not pay ``tags_for_note`` N+1 times.
+        """
+        cursor = self._conn.execute(
+            "SELECT nt.note_id AS note_id, t.name AS name "
+            "FROM note_tags nt JOIN tags t ON t.id = nt.tag_id "
+            "ORDER BY nt.note_id, t.name"
+        )
+        for row in cursor:
+            yield row["note_id"], row["name"]
+
     # --- bibliography ----------------------------------------------------
 
     def upsert_bib_entries(

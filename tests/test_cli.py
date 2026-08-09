@@ -453,6 +453,108 @@ class TestRm:
         assert "deleted 2 notes" in out
 
 
+class TestStats:
+    def test_overview_on_an_empty_database(self, db: Path) -> None:
+        output = run(db, "stats")
+        assert "notes: 0" in output
+        assert "tags:  0" in output
+        assert "works: 0" in output
+        assert "no notes yet" in output
+        assert "None" not in output
+
+    def test_overview_with_seeded_data(self, db: Path) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020")
+        run(db, "add", "one #rust")
+        run(db, "add", "two #async", "--no-context")
+        output = run(db, "stats")
+        assert "notes: 2" in output
+        assert "works: 1" in output
+        assert "first note:" in output
+        assert "last note:" in output
+
+    def test_activity_selector(self, db: Path) -> None:
+        run(db, "add", "one")
+        run(db, "add", "two")
+        output = run(db, "stats", "--activity")
+        assert "count" in output
+        assert "period" in output
+
+    def test_tags_selector(self, db: Path) -> None:
+        run(db, "add", "one #rust")
+        run(db, "add", "two #rust")
+        run(db, "add", "three #python")
+        output = run(db, "stats", "--tags")
+        assert "rust" in output
+        assert "python" in output
+
+    def test_tags_selector_honours_top(self, db: Path) -> None:
+        run(db, "add", "a #popular")
+        run(db, "add", "b #popular")
+        run(db, "add", "c #rare")
+        output = run(db, "stats", "--tags", "--top", "1")
+        assert "popular" in output
+        assert "rare" not in output
+
+    def test_reading_selector(self, db: Path) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020")
+        run(db, "add", "a note on it")
+        output = run(db, "stats", "--reading")
+        assert "smith2020" in output
+        assert "note_count" in output
+
+    def test_threads_selector(self, db: Path) -> None:
+        out = run(db, "add", "root note")
+        root_id = out.split()[0]
+        run(db, "reply", root_id, "a reply")
+        output = run(db, "stats", "--threads")
+        assert "reply_count" in output
+        assert "max_depth" in output
+
+    def test_csv_writes_the_selected_frame(self, db: Path, tmp_path: Path) -> None:
+        run(db, "add", "one #rust", "-t", "extra")
+        run(db, "add", "two #rust")
+        csv_path = tmp_path / "tags.csv"
+        run(db, "stats", "--tags", "--csv", str(csv_path))
+        contents = csv_path.read_text(encoding="utf-8")
+        assert "period" in contents
+        assert "rust" in contents
+        assert "2" in contents
+
+    def test_csv_with_no_selector_writes_the_overview(
+        self, db: Path, tmp_path: Path
+    ) -> None:
+        run(db, "add", "one #rust")
+        csv_path = tmp_path / "overview.csv"
+        run(db, "stats", "--csv", str(csv_path))
+        contents = csv_path.read_text(encoding="utf-8")
+        assert "note_count" in contents
+        assert "tag_count" in contents
+        lines = contents.splitlines()
+        assert len(lines) == 2
+        assert "1" in lines[1]
+
+    def test_two_selectors_at_once_fails(self, db: Path) -> None:
+        result = runner.invoke(
+            app, ["--db", str(db), "stats", "--activity", "--tags"]
+        )
+        assert result.exit_code != 0
+        assert "only one of" in result.output
+
+    def test_bad_freq_fails(self, db: Path) -> None:
+        result = runner.invoke(
+            app, ["--db", str(db), "stats", "--activity", "--freq", "M"]
+        )
+        assert result.exit_code != 0
+
+    def test_bad_freq_with_tags_selector_fails(self, db: Path) -> None:
+        result = runner.invoke(
+            app, ["--db", str(db), "stats", "--tags", "--freq", "bogus"]
+        )
+        assert result.exit_code != 0
+
+
 class TestExport:
     def test_exports_everything(self, db: Path) -> None:
         run(db, "add", "parent")
@@ -742,3 +844,30 @@ class TestSemanticSearch:
         run(db, "index")
         assert "no matches" in run(db, "search", "one", "--limit", "0")
         assert "no matches" in run(db, "search", "one", "--semantic", "--limit", "0")
+
+
+class TestStatsTimezone:
+    """One command must not report the same note at two different hours."""
+
+    def test_event_timestamps_print_in_local_time(self, db: Path) -> None:
+        """The overview and `hashline list` already do; the frames did not."""
+        run(db, "add", "a note")
+        overview = run(db, "stats")
+        threads = run(db, "stats", "--threads")
+        hour = [
+            line.split("first note: ")[1][:16]
+            for line in overview.splitlines()
+            if line.startswith("first note:")
+        ][0]
+        assert hour in threads, (
+            f"the overview says {hour!r} but --threads reports\n{threads}"
+        )
+
+    def test_period_buckets_stay_in_utc(self, db: Path) -> None:
+        """A bucket is not an instant.
+
+        Shifting the resample index would label a UTC day "09:00" for a reader
+        nine hours ahead, which says something the data does not.
+        """
+        run(db, "add", "a note")
+        assert "+00:00" in run(db, "stats", "--activity")

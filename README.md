@@ -217,6 +217,7 @@ The Web UI implements equivalent functionality to the CLI commands:
 | `hashline export` | `GET /export`, `GET /export/download` |
 | `hashline index` | runs by itself when the server starts |
 | `hashline search --semantic` | the **semantic** toggle beside the search box |
+| `hashline stats` | `GET /stats` |
 
 One deliberate difference: `hashline read start` replaces the pinned tags, while `POST /context/read` adds the reading tag to them. The context strip shows the pinned tags and the pinned work side by side with a clear button each, so starting a read there should not empty the column next to it.
 
@@ -285,6 +286,62 @@ symmetric task.
 - Both adapters import all of it inside the functions that need it, so nothing
   pays for numpy at startup.
 
+## Stats
+
+Aggregate views over the notes you already have: how much you write, which tags
+are moving, which works you have read, and how your threads are shaped.
+
+```bash
+uv run hashline stats                          # totals and the date range
+uv run hashline stats --activity --freq D      # notes per day
+uv run hashline stats --tags --freq W --top 5  # the five busiest tags, weekly
+uv run hashline stats --reading                # one row per work you have notes on
+uv run hashline stats --threads                # one row per thread root
+uv run hashline stats --tags --csv tags.csv    # the same frame, as a file
+```
+
+```
+                                  title  note_count              first_note_at  pages
+citekey
+smith2020  A Survey of Trigram Indexing           2 2026-08-10 08:19:48.748213  [12-15, 40]
+```
+
+Pages stay as written (`12-15`, `xii`, `第3章`) — they are collected, never
+parsed into numbers, because a page reference is not arithmetic.
+
+The same views are in the web UI at `/stats`, with the view, the period and the
+tag count as dropdowns.
+
+### Why pandas is used for reporting and not for storage
+
+The question that produced this layer was whether hashline should manage notes
+with pandas instead of SQL. It was measured rather than argued:
+
+| | |
+|---|---|
+| `import hashline.cli` — the whole app, Typer included | **~40 ms** |
+| `import pandas` alone | **~220 ms** |
+| `hashline list`, end to end | 0.06 s |
+
+pandas on the everyday path would multiply the cost of capturing a one-line
+note several times over, for a workload — insert one row, read a few — that a
+DataFrame is not better at. Replacing SQLite would also give up the FTS5 index
+and BM25 ranking (pandas has no inverted index), atomic single-row writes,
+concurrent access from the CLI and the web server at once, and foreign-key
+cascades.
+
+So storage and retrieval are untouched, and pandas is used only where it is
+genuinely better than SQL — grouping, resampling, pivoting — and imported
+**inside** the functions that need it. A test asserts that `pandas` is absent
+from `sys.modules` after importing either adapter, because that is the only
+thing standing between this design and a stray top-level import that silently
+slows down every command.
+
+Timestamps print in your timezone, except the resample buckets, which stay UTC:
+a bucket is not an instant, and shifting a UTC day would label it `09:00` for a
+reader nine hours ahead. `--csv` writes UTC throughout, since a CSV is read by
+a program.
+
 ## Upgrading
 
 This release carries the project's first schema migrations. An existing database is upgraded in place the next time it is opened, and going back to an older version of `hashline` afterwards will not work.
@@ -329,17 +386,21 @@ src/hashline/
   importer.py   documents -> note drafts (pure functions; no file I/O)
   bib.py        BibTeX parsing (pure functions; no file I/O)
   outline.py    Markdown outline building and rendering (pure functions)
+  analytics.py  DataFrames over the store; pandas imported lazily
   cli.py        Typer adapter; owns all filesystem I/O
   schema.sql    tables, indexes, FTS5 index and its sync triggers
   web/app.py       FastAPI + HTMX adapter
   ml/search.py     ranking maths for semantic search (pure numpy)
   ml/embed.py      embedding backend behind the optional `ml` extra
+  ml/hybrid.py     semantic retrieval against a store, shared by both adapters
   ml/protocols.py  the Embedder protocol; numpy and nothing else
 tests/
 ```
 
 The core (`models`, `tags`, `store`, `importer`, `bib`, `outline`) is plain Python
-over the standard library plus numpy. The CLI and the web UI are thin adapters over it.
+over the standard library plus numpy. `analytics` and `ml/hybrid` sit above it —
+they read a store and return values — and the CLI and the web UI are thin
+adapters over all of it.
 
 ## License
 

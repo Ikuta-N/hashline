@@ -12,6 +12,7 @@ import re
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Final
 from urllib.parse import urlsplit
@@ -992,4 +993,131 @@ def export_download(
         content=markdown,
         media_type="text/markdown",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _cell(value: object) -> str:
+    """Render one analytics value as plain text for the table template.
+
+    ``pandas.Timestamp`` subclasses ``datetime.datetime``, so this one branch
+    formats both it and the plain ``datetime`` objects ``overview()`` returns.
+    Never returns markup -- the template escapes every cell, so a note body
+    or tag name that ends up here is never trusted.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M")
+    return str(value)
+
+
+@app.get("/stats", response_class=HTMLResponse)
+def stats(
+    request: Request,
+    store: StoreDep,
+    view: str = "overview",
+    freq: str = "D",
+    top: str = "10",
+) -> HTMLResponse:
+    """Analytics as plain tables: totals, activity, tag trends, reading, threads.
+
+    Always answers 200. ``hashline.analytics`` raises ``ValueError`` for a
+    ``freq`` (or, here, a non-numeric ``top``) it does not accept -- that is
+    caught and shown in the page's error slot rather than answered as a 4xx,
+    because htmx does not swap a non-2xx response and the page would just
+    sit there. Rows are built as plain lists of strings, never
+    ``DataFrame.to_html()``, so Jinja's autoescaping still covers note
+    bodies and tag names that end up in a cell.
+    """
+    from hashline import analytics
+
+    error: str | None = None
+    columns: list[str] = []
+    rows: list[list[str]] = []
+
+    try:
+        if view == "overview":
+            totals = analytics.overview(store)
+            columns = ["metric", "value"]
+            rows = [[key, _cell(value)] for key, value in totals.items()]
+        elif view == "activity":
+            activity_frame = analytics.activity(store, freq=freq)
+            columns = ["period", "count"]
+            rows = [
+                [_cell(period), _cell(count)]
+                for period, count in activity_frame["count"].items()
+            ]
+        elif view == "tags":
+            try:
+                top_n = int(top)
+            except ValueError as exc:
+                raise ValueError(f"top must be a whole number, got {top!r}") from exc
+            tag_frame = analytics.tag_trend(store, freq=freq, top=top_n)
+            columns = ["period", *(str(tag) for tag in tag_frame.columns)]
+            rows = [
+                [_cell(period), *(_cell(value) for value in row.tolist())]
+                for period, row in tag_frame.iterrows()
+            ]
+        elif view == "reading":
+            reading_frame = analytics.reading_summary(store)
+            columns = [
+                "citekey",
+                "title",
+                "note_count",
+                "first_note_at",
+                "last_note_at",
+                "pages",
+            ]
+            rows = [
+                [
+                    _cell(citekey),
+                    _cell(row["title"]),
+                    _cell(row["note_count"]),
+                    _cell(row["first_note_at"]),
+                    _cell(row["last_note_at"]),
+                    _cell(row["pages"]),
+                ]
+                for citekey, row in reading_frame.iterrows()
+            ]
+        elif view == "threads":
+            thread_frame = analytics.thread_summary(store)
+            columns = [
+                "root_id",
+                "reply_count",
+                "max_depth",
+                "first_note_at",
+                "last_note_at",
+            ]
+            rows = [
+                [
+                    _cell(root_id),
+                    _cell(row["reply_count"]),
+                    _cell(row["max_depth"]),
+                    _cell(row["first_note_at"]),
+                    _cell(row["last_note_at"]),
+                ]
+                for root_id, row in thread_frame.iterrows()
+            ]
+        else:
+            error = f"unknown view: {view!r}"
+    except ValueError as exc:
+        error = str(exc)
+        columns = []
+        rows = []
+
+    return templates.TemplateResponse(
+        request=request,
+        name="stats.html",
+        context={
+            "current_page": "stats",
+            "total": store.count_notes(),
+            "view": view,
+            "freq": freq,
+            "top": top,
+            "columns": columns,
+            "rows": rows,
+            "error": error,
+        },
     )

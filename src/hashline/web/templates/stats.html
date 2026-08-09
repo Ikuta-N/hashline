@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Stats - hashline{% endblock %}
+{% block content %}
+<div class="stack">
+  <h2>Stats</h2>
+  <div class="card" style="padding: 1.5rem; background: var(--card); border: 1px solid var(--line); border-radius: .5rem; margin-bottom: 2rem;">
+    <form hx-get="/stats" hx-target="#stats-container" hx-select="#stats-container" hx-swap="outerHTML" hx-trigger="change from:select, submit" class="stack" style="margin-bottom: 2rem;">
+      <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+        <div>
+          <label style="display: block; margin-bottom: .25rem; font-weight: bold;">View</label>
+          <select name="view" style="padding: .4rem; width: 160px;">
+            <option value="overview" {% if view == 'overview' %}selected{% endif %}>Overview</option>
+            <option value="activity" {% if view == 'activity' %}selected{% endif %}>Activity</option>
+            <option value="tags" {% if view == 'tags' %}selected{% endif %}>Tags</option>
+            <option value="reading" {% if view == 'reading' %}selected{% endif %}>Reading</option>
+            <option value="threads" {% if view == 'threads' %}selected{% endif %}>Threads</option>
+          </select>
+        </div>
+        <div>
+          <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Frequency</label>
+          <select name="freq" style="padding: .4rem; width: 140px;">
+            <option value="D" {% if freq == 'D' %}selected{% endif %}>Daily</option>
+            <option value="W" {% if freq == 'W' %}selected{% endif %}>Weekly</option>
+            <option value="ME" {% if freq == 'ME' %}selected{% endif %}>Monthly</option>
+          </select>
+        </div>
+        <div>
+          <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Top tags</label>
+          <select name="top" style="padding: .4rem; width: 100px;">
+            <option value="5" {% if top == '5' %}selected{% endif %}>5</option>
+            <option value="10" {% if top == '10' %}selected{% endif %}>10</option>
+            <option value="20" {% if top == '20' %}selected{% endif %}>20</option>
+            <option value="50" {% if top == '50' %}selected{% endif %}>50</option>
+          </select>
+        </div>
+      </div>
+      <noscript>
+        <button type="submit" style="padding: .4rem 1rem;">Refresh</button>
+      </noscript>
+    </form>
+
+    <div id="stats-container">
+      {% if error %}
+        <div class="error" style="margin-bottom: 1rem;">{{ error }}</div>
+      {% endif %}
+      <div style="overflow-x: auto;">
+        <table style="width: 100%; border-collapse: collapse; text-align: left;">
+          <thead>
+            <tr style="border-bottom: 1px solid var(--line);">
+              {% for column in columns %}
+                <th style="padding: 0.5rem;">{{ column }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+              <tr style="border-bottom: 1px solid var(--line);">
+                {% for cell in row %}
+                  <td style="padding: 0.5rem;">{{ cell }}</td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

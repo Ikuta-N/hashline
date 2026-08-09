@@ -77,3 +77,31 @@ class TestPageAndCitekey:
         assert len(hits) == 1
         assert hits[0].note.page == "7"
         assert hits[0].note.citekey == "smith2020"
+
+
+class TestIterNoteTags:
+    def test_empty_database_yields_nothing(self, store: Store) -> None:
+        assert list(store.iter_note_tags()) == []
+
+    def test_yields_every_note_tag_pair(self, store: Store) -> None:
+        first = store.add_note("one #rust #async")
+        second = store.add_note("two #rust")
+        assert list(store.iter_note_tags()) == [
+            (first.id, "async"),
+            (first.id, "rust"),
+            (second.id, "rust"),
+        ]
+
+    def test_ordered_by_note_id_then_tag(self, store: Store) -> None:
+        first = store.add_note("first #zebra #apple")
+        second = store.add_note("second #mango")
+        pairs = list(store.iter_note_tags())
+        assert pairs == [
+            (first.id, "apple"),
+            (first.id, "zebra"),
+            (second.id, "mango"),
+        ]
+
+    def test_a_note_without_tags_is_absent(self, store: Store) -> None:
+        store.add_note("no tags here")
+        assert list(store.iter_note_tags()) == []
