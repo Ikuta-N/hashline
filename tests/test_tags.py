@@ -48,8 +48,22 @@ class TestExtractTags:
     def test_keeps_internal_hyphens(self) -> None:
         assert extract_tags("#full-text search") == ["full-text"]
 
-    def test_ignores_url_fragments(self) -> None:
-        assert extract_tags("see https://example.com/page#section") == []
+    def test_follows_japanese_punctuation(self) -> None:
+        assert extract_tags("朝のメモ。#日記、あとで見る") == ["日記"]
+
+    def test_follows_a_bracket(self) -> None:
+        assert extract_tags("あとで(#todo)") == ["todo"]
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "see https://example.com/page#section",
+            "see https://example.com/#top",
+            "issue tracker#42",
+        ],
+    )
+    def test_ignores_a_hash_glued_to_the_previous_word(self, text: str) -> None:
+        assert extract_tags(text) == []
 
     def test_ignores_markdown_headings(self) -> None:
         assert extract_tags("# Heading\n## Sub heading\ntext") == []

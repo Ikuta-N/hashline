@@ -8,12 +8,17 @@ from typing import Final
 
 _TAG_BODY: Final = r"\w[\w-]*"
 
-#: A ``#tag`` in note text. The ``#`` must start the string or follow whitespace,
-#: which keeps URL fragments (``https://example.com#frag``) out. The character
-#: right after ``#`` must be a word character, which keeps Markdown ATX headings
-#: (``# Heading``, ``## Heading``) out. ``\w`` is Unicode-aware, so ``#日本語``
-#: is a tag.
-TAG_RE: Final = re.compile(rf"(?:^|(?<=\s))#({_TAG_BODY})")
+#: A ``#tag`` in note text.
+#:
+#: The ``#`` must not follow a word character, ``/`` or another ``#``, which is
+#: what keeps URL fragments (``https://example.com/page#frag``) out. Anything
+#: else may precede it -- notably Japanese punctuation, so ``朝のメモ。#日記``
+#: tags the note.
+#:
+#: The character right after ``#`` must be a word character, which keeps Markdown
+#: ATX headings (``# Heading``, ``## Heading``) out. ``\w`` is Unicode-aware, so
+#: ``#日本語`` is a tag.
+TAG_RE: Final = re.compile(rf"(?<![\w/#])#({_TAG_BODY})")
 
 _VALID_TAG_RE: Final = re.compile(rf"\A{_TAG_BODY}\Z")
 
