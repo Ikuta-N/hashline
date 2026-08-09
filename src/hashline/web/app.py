@@ -107,7 +107,6 @@ def index(
         "citekey": citekey,
         "roots_only": roots_only,
         "limit": limit,
-        "tags": store.list_tags(limit=30),
         "total": store.count_notes(),
     }
 

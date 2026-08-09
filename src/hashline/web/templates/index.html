@@ -63,13 +63,5 @@
   </nav>
   {% endif %}
 
-  <nav class="tags">
-    <a href="{{ filter_link(q=q, citekey=citekey, roots_only=roots_only, limit=limit) }}" class="{{ 'on' if not tag }}">all</a>
-    {% for entry in tags %}
-      <a href="{{ filter_link(tag=entry.name, q=q, citekey=citekey, roots_only=roots_only, limit=limit) }}"
-         class="{{ 'on' if entry.name == tag }}">#{{ entry.name }} {{ entry.count }}</a>
-    {% endfor %}
-  </nav>
-
   {% include "_timeline.html" %}
 {% endblock %}

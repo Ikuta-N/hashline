@@ -200,27 +200,31 @@ class TestTimelineFragment:
 
 
 class TestFilters:
-    @pytest.mark.parametrize("label", ["all", "#sqlite"])
-    def test_the_tag_links_keep_a_widened_limit(
-        self, seeded: TestClient, label: str
-    ) -> None:
-        """``limit`` is a filter, so the plain links must carry it too.
-
-        Every htmx path on this page carries ``limit`` because widening it
-        and then typing, replying or deleting used to snap the timeline
-        back to 50. The tag chips are ordinary ``<a href>`` links and were
-        left behind, so one click undoes the widening with nothing on
-        screen to say the list just got shorter.
+    def test_the_tag_chips_nav_is_gone(self, seeded: TestClient) -> None:
+        """The chip nav grew without bound and pushed the timeline off
+        screen, so it was removed. ``/?tag=NAME`` must keep working
+        though -- the hidden tag input and every htmx control's
+        hx-include still carry it -- so that is what replaces the old
+        "clicking a tag chip keeps working" coverage below.
         """
-        page = seeded.get("/", params={"limit": "200"})
+        page = seeded.get("/")
         assert page.status_code == 200
-        pattern = r'<a href="(/\?[^"]*)"[^>]*>\s*' + re.escape(label)
-        links = re.findall(pattern, page.text)
-        assert links, f"no {label!r} link found on the page"
-        for href in links:
-            assert "limit=200" in href, (
-                f"the {label!r} link is {href!r}, which drops the widened limit"
-            )
+        assert 'class="tags"' not in page.text
+        assert 'href="/?tag=' not in page.text, (
+            "a tag-chip link is still being rendered somewhere on the page"
+        )
+
+    def test_tag_query_param_still_filters_the_timeline(
+        self, seeded: TestClient
+    ) -> None:
+        page = seeded.get("/", params={"tag": "sqlite"})
+        assert page.status_code == 200
+        assert "bm25" in page.text
+        assert "無関係なメモ" not in page.text
+        # /?tag=NAME must keep working from outside the app (a bookmark, a
+        # link elsewhere), and every htmx control still has to pick the
+        # value up through hx-include, so the hidden field has to survive.
+        assert 'name="tag" value="sqlite"' in page.text
 
     def test_filter_by_citekey(self, client: TestClient, tmp_path: Path) -> None:
         with Store.open(tmp_path / "hashline.db") as store:
