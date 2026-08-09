@@ -282,7 +282,7 @@ def _timeline(
             yield root.note, store.tags_for_note(root.note.id), depth
             yield from flatten(root.children, depth + 1)
 
-    return list(flatten(build_tree(found)))
+    return list(flatten(reversed(build_tree(found))))
 
 
 def _context_data(store: Store, error: str | None = None) -> dict[str, Any]:
