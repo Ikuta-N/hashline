@@ -57,6 +57,49 @@ class TestIndex:
 
 
 class TestTimelineFragment:
+    def test_roots_are_newest_first_in_the_fragment(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            ids = [store.add_note(f"note{i}").id for i in range(4)]
+        body = client.get("/notes").text
+        positions = [body.index(f'id="note-{note_id}"') for note_id in ids]
+        # note3 (last created) must read first: newest-first, like the store.
+        assert positions == sorted(positions, reverse=True)
+
+    def test_roots_are_newest_first_on_the_index_page(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            ids = [store.add_note(f"note{i}").id for i in range(4)]
+        body = client.get("/").text
+        positions = [body.index(f'id="note-{note_id}"') for note_id in ids]
+        assert positions == sorted(positions, reverse=True)
+
+    def test_root_order_matches_hashline_list(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            for i in range(4):
+                store.add_note(f"note{i}")
+            expected_ids = [n.id for n in store.list_notes()]
+        body = client.get("/notes").text
+        seen_order = sorted(expected_ids, key=lambda i: body.index(f'id="note-{i}"'))
+        assert seen_order == expected_ids
+
+    def test_replies_under_one_parent_read_oldest_first(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            root = store.add_note("root")
+            first = store.add_note("reply-a", parent_id=root.id)
+            second = store.add_note("reply-b", parent_id=root.id)
+        body = client.get("/notes").text
+        # A conversation reads forward, oldest reply first.
+        assert body.index(f'id="note-{first.id}"') < body.index(
+            f'id="note-{second.id}"'
+        )
+
     def test_returns_only_the_timeline(self, seeded: TestClient) -> None:
         body = seeded.get("/notes").text
         assert 'id="timeline"' in body
@@ -168,6 +211,77 @@ class TestFilters:
         body = client.get("/", params={"citekey": "testkey", "roots_only": "true"}).text
         assert 'name="citekey" value="testkey"' in body
         assert 'name="roots_only" value="true" checked' in body
+
+    def test_capture_keeps_the_citekey_filter(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        title="Title",
+                        author="",
+                        year="",
+                        tag="smith2020",
+                        entry_type="",
+                    )
+                ]
+            )
+            store.add_note("about smith", citekey="smith2020")
+            store.add_note("unrelated")
+        response = client.post(
+            "/notes", data={"body": "new note #other", "citekey": "smith2020"}
+        )
+        assert response.status_code == 200
+        assert "about smith" in response.text
+        assert "unrelated" not in response.text
+        assert "new note" not in response.text
+
+    def test_capture_keeps_the_roots_only_filter(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("parent")
+            store.add_note("reply note", parent_id=1)
+        response = client.post(
+            "/notes", data={"body": "another note", "roots_only": "true"}
+        )
+        assert response.status_code == 200
+        assert "reply note" not in response.text
+
+    def test_delete_keeps_the_roots_only_filter(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("parent")
+            store.add_note("reply note", parent_id=1)
+            store.add_note("other root")
+        response = client.post("/notes/3/delete", data={"roots_only": "true"})
+        assert response.status_code == 200
+        assert "reply note" not in response.text
+
+    def test_capture_keeps_the_search_query(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("bm25 ranking notes")
+            store.add_note("something else")
+        response = client.post(
+            "/notes", data={"body": "unrelated capture", "q": "bm25"}
+        )
+        assert response.status_code == 200
+        assert "bm25 ranking notes" in response.text
+        assert "something else" not in response.text
+        assert "unrelated capture" not in response.text
+
+    def test_reply_form_carries_the_active_tag_and_query(
+        self, seeded: TestClient
+    ) -> None:
+        response = seeded.get("/notes/1/reply", params={"tag": "sqlite", "q": "bm25"})
+        assert response.status_code == 200
+        assert 'name="tag" value="sqlite"' in response.text
+        assert 'name="q" value="bm25"' in response.text
 
 
 class TestCreateNote:
@@ -448,6 +562,96 @@ class TestContext:
         assert "research" not in response.text
         assert 'name="citekey"' in response.text
 
+    def test_pin_tags_form_still_offered_once_a_work_is_pinned(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        tag="smith2020",
+                        entry_type="article",
+                        title="Test",
+                    )
+                ]
+            )
+        client.post("/context/read", data={"citekey": "smith2020", "tag": ""})
+        # Without this form the reader has no way to change tags once reading.
+        response = client.get("/context")
+        assert response.status_code == 200
+        assert 'hx-post="/context/pin"' in response.text
+
+    def test_clear_tags_keeps_the_pinned_citekey(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        tag="smith2020",
+                        entry_type="article",
+                        title="Test",
+                    )
+                ]
+            )
+        client.post("/context/read", data={"citekey": "smith2020", "tag": "reading"})
+        client.post("/context/pin", data={"tag": "extra"})
+        response = client.post("/context/clear_tags")
+        assert response.status_code == 200
+        # Assert on the stored context, not on the HTML: the strip's own copy
+        # mentions tag names (the pin field's placeholder says "reading"), so a
+        # substring check would pass or fail for the wrong reason.
+        with Store.open(tmp_path / "hashline.db") as store:
+            context = store.get_context()
+        assert context.citekey == "smith2020"
+        assert context.tags == ()
+
+    def test_clear_read_keeps_the_pinned_tags(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        tag="smith2020",
+                        entry_type="article",
+                        title="Test",
+                    )
+                ]
+            )
+        client.post("/context/read", data={"citekey": "smith2020", "tag": "reading"})
+        response = client.post("/context/clear_read")
+        assert response.status_code == 200
+        with Store.open(tmp_path / "hashline.db") as store:
+            context = store.get_context()
+        assert context.citekey is None
+        assert context.tags == ("reading",)
+
+    def test_clear_still_drops_both_the_work_and_the_tags(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        tag="smith2020",
+                        entry_type="article",
+                        title="Test",
+                    )
+                ]
+            )
+        client.post("/context/read", data={"citekey": "smith2020", "tag": "reading"})
+        response = client.post("/context/clear")
+        assert response.status_code == 200
+        with Store.open(tmp_path / "hashline.db") as store:
+            context = store.get_context()
+        assert context.citekey is None
+        assert context.tags == ()
+
 
 class TestBib:
     def test_bib_list_empty(self, client: TestClient) -> None:
@@ -501,6 +705,45 @@ class TestBib:
         response = client.get("/bib/unknown")
         assert response.status_code == 404
 
+    def test_bib_list_read_button_posts_to_the_fragment_route(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="A title",
+                        tag="smith2020",
+                    )
+                ]
+            )
+        response = client.get("/bib")
+        assert response.status_code == 200
+        assert 'hx-post="/context/read"' in response.text
+        # A plain form submit navigates away and renders a bare fragment.
+        assert 'action="/context/read"' not in response.text
+
+    def test_bib_detail_read_button_posts_to_the_fragment_route(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="A title",
+                        tag="smith2020",
+                    )
+                ]
+            )
+        response = client.get("/bib/smith2020")
+        assert response.status_code == 200
+        assert 'hx-post="/context/read"' in response.text
+        assert 'action="/context/read"' not in response.text
+
 
 class TestImport:
     def test_import_notes_path(self, client: TestClient, tmp_path: Path) -> None:
@@ -544,12 +787,18 @@ class TestImport:
         assert response.status_code == 200
         assert "Please provide a path or upload files" in response.text
 
-    def test_import_notes_invalid_mode(self, client: TestClient) -> None:
+    def test_import_notes_invalid_mode(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
         files = {"files": ("notes.txt", b"a note\n")}
         response = client.post("/import", data={"mode": "invalid"}, files=files)
         assert response.status_code == 200
-        # fallback to line
-        assert "imported 1 notes" in response.text
+        # The CLI rejects an unknown --mode outright; the web form must too,
+        # not silently fall back to line mode.
+        assert 'class="error"' in response.text
+        assert "imported 1 notes" not in response.text
+        with Store.open(tmp_path / "hashline.db") as store:
+            assert store.count_notes() == 0
 
     def test_import_bib_upload(self, client: TestClient) -> None:
         files = {"file": ("library.bib", b"@article{smith2020, title={A title}}")}
@@ -597,7 +846,9 @@ class TestExport:
     def test_export_preview_root_conflict(self, client: TestClient) -> None:
         response = client.get("/export", params={"root": 1, "tag": "test"})
         assert response.status_code == 200
-        assert "--root cannot be combined with --tag or --citekey" in response.text
+        assert 'class="error"' in response.text
+        # The reader is looking at a form, not a terminal.
+        assert "--root" not in response.text
 
     def test_export_download_success(self, seeded: TestClient) -> None:
         response = seeded.get("/export/download", params={"tag": "sqlite"})
@@ -609,8 +860,12 @@ class TestExport:
 
     def test_export_download_root_conflict(self, client: TestClient) -> None:
         response = client.get("/export/download", params={"root": 1, "tag": "test"})
-        assert response.status_code == 400
-        assert "--root cannot be combined" in response.text
+        # A rejected form never answers 4xx: it comes back as the export page
+        # with a readable error, not a file the browser tries to save.
+        assert response.status_code == 200
+        assert "Content-Disposition" not in response.headers
+        assert 'class="error"' in response.text
+        assert "--root" not in response.text
 
     def test_export_download_thread(self, seeded: TestClient, tmp_path: Path) -> None:
         with Store.open(tmp_path / "hashline.db") as store:
@@ -637,6 +892,61 @@ class TestExport:
     def test_export_download_invalid_root(self, client: TestClient) -> None:
         response = client.get("/export/download", params={"root": 999})
         assert response.status_code == 400
+
+    def test_export_preview_accepts_a_browser_blank_root(
+        self, client: TestClient
+    ) -> None:
+        # A browser submits every field, including the ones left empty.
+        response = client.get(
+            "/export", params={"tag": "", "citekey": "", "root": ""}
+        )
+        assert response.status_code == 200
+
+    def test_export_preview_accepts_a_blank_root_alongside_a_tag(
+        self, seeded: TestClient
+    ) -> None:
+        response = seeded.get(
+            "/export", params={"tag": "sqlite", "citekey": "", "root": ""}
+        )
+        assert response.status_code == 200
+        assert "bm25" in response.text
+
+    def test_export_download_accepts_a_blank_root_alongside_a_tag(
+        self, seeded: TestClient
+    ) -> None:
+        response = seeded.get(
+            "/export/download", params={"tag": "sqlite", "citekey": "", "root": ""}
+        )
+        assert response.status_code == 200
+        assert response.headers["Content-Disposition"].startswith("attachment")
+
+    def test_export_download_accepts_blank_tag_and_citekey_alongside_a_root(
+        self, seeded: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            parent = store.add_note("parent")
+            store.add_note("child", parent_id=parent.id)
+        response = seeded.get(
+            "/export/download",
+            params={"tag": "", "citekey": "", "root": str(parent.id)},
+        )
+        assert response.status_code == 200
+
+    def test_download_filename_does_not_leak_a_raw_quote(
+        self, client: TestClient
+    ) -> None:
+        response = client.get("/export/download", params={"tag": 'a"b'})
+        assert response.status_code == 200
+        disposition = response.headers["Content-Disposition"]
+        # Exactly the two quotes that delimit the filename -- none from the tag.
+        assert disposition.count('"') == 2
+
+    def test_download_filename_strips_crlf(self, client: TestClient) -> None:
+        response = client.get("/export/download", params={"tag": "a\r\nb"})
+        assert response.status_code == 200
+        disposition = response.headers["Content-Disposition"]
+        assert "\r" not in disposition
+        assert "\n" not in disposition
 
     def test_delete_note_not_found(self, client: TestClient) -> None:
         response = client.post("/notes/999/delete")
