@@ -15,7 +15,7 @@ import typer
 from hashline.bib import parse_bibtex
 from hashline.files import read_documents
 from hashline.importer import parse_documents
-from hashline.models import BibEntry, Context, Note
+from hashline.models import DEFAULT_READING_TAG, BibEntry, Context, Note
 from hashline.outline import build_tree, render_markdown
 from hashline.store import NoteHasReplies, Store, default_db_path
 from hashline.tags import normalize_tag
@@ -23,8 +23,6 @@ from hashline.tags import normalize_tag
 _BODY_WIDTH: Final = 90
 _WHITESPACE_RE: Final = re.compile(r"\s+")
 
-#: The tag `read start` pins alongside a citekey, unless --tag overrides it.
-_DEFAULT_READING_TAG: Final = "reading"
 
 
 class Mode(StrEnum):
@@ -431,7 +429,7 @@ def read_start(
     tag: Annotated[
         str,
         typer.Option("--tag", "-t", help="Extra tag pinned alongside the citekey."),
-    ] = _DEFAULT_READING_TAG,
+    ] = DEFAULT_READING_TAG,
 ) -> None:
     """Pin CITEKEY as the work being read.
 

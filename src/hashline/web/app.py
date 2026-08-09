@@ -14,9 +14,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from hashline.models import Context, Note
+from hashline.models import DEFAULT_READING_TAG, Context, Note
 from hashline.store import Store, default_db_path
-from hashline.tags import normalize_tag
 
 _HERE: Final = Path(__file__).parent
 
@@ -150,9 +149,8 @@ def pin_context(
     error = None
     if tag.strip():
         try:
-            normalized = [normalize_tag(t) for t in tag.split()]
             current = store.get_context()
-            store.set_context(Context(tags=tuple(normalized), citekey=current.citekey))
+            store.set_context(Context(tags=tuple(tag.split()), citekey=current.citekey))
         except ValueError as exc:
             error = str(exc)
     return templates.TemplateResponse(
@@ -176,12 +174,10 @@ def read_context(
         )
     else:
         try:
-            tag_name = tag.strip() or "reading"
-            normalized_tag = normalize_tag(tag_name)
-            store.set_context(Context(tags=(normalized_tag,), citekey=citekey))
+            tag_name = tag.strip() or DEFAULT_READING_TAG
+            store.set_context(Context(tags=(tag_name,), citekey=citekey))
         except ValueError as exc:
             error = str(exc)
-            
     return templates.TemplateResponse(
         request=request, name="_context.html", context=_context_data(store, error=error)
     )
