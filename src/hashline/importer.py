@@ -129,9 +129,20 @@ def parse_documents(
     common_tags: Sequence[str] = (),
 ) -> list[NoteDraft]:
     """Cut many documents into drafts, keeping the order they were given in."""
+    from dataclasses import replace
+
     drafts: list[NoteDraft] = []
     for doc in docs:
-        drafts.extend(parse_document(doc, mode=mode, common_tags=common_tags))
+        offset = len(drafts)
+        doc_drafts = parse_document(doc, mode=mode, common_tags=common_tags)
+        if offset > 0:
+            doc_drafts = [
+                replace(draft, parent_index=draft.parent_index + offset)
+                if draft.parent_index is not None
+                else draft
+                for draft in doc_drafts
+            ]
+        drafts.extend(doc_drafts)
     return drafts
 
 

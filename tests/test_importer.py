@@ -163,6 +163,21 @@ class TestParseDocuments:
     def test_no_documents(self) -> None:
         assert parse_documents([]) == []
 
+    def test_shifts_parent_index_for_subsequent_documents(self) -> None:
+        doc1 = Document(source="a.md", text="- root A\n  - child A")
+        doc2 = Document(source="b.md", text="- root B\n  - child B")
+        drafts = parse_documents([doc1, doc2], mode="outline")
+        
+        assert len(drafts) == 4
+        assert drafts[0].body == "root A"
+        assert drafts[0].parent_index is None
+        assert drafts[1].body == "child A"
+        assert drafts[1].parent_index == 0
+        assert drafts[2].body == "root B"
+        assert drafts[2].parent_index is None
+        assert drafts[3].body == "child B"
+        assert drafts[3].parent_index == 2
+
 
 class TestSplitters:
     def test_registry_covers_both_modes(self) -> None:

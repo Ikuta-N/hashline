@@ -457,3 +457,21 @@ class TestExport:
 
         output = run(db, "export")
         assert "- parent\n  - child\n" in output
+
+    def test_multiple_outlines_keep_parents_local(
+        self, db: Path, tmp_path: Path
+    ) -> None:
+        file_a = tmp_path / "a.md"
+        file_a.write_text("- root A\n  - child A\n", encoding="utf-8")
+        file_b = tmp_path / "b.md"
+        file_b.write_text("- root B\n  - child B\n", encoding="utf-8")
+
+        run(db, "import", str(file_a), str(file_b), "--mode", "outline")
+
+        # root A is 1, child A is 2, root B is 3, child B is 4.
+        # Check child B's parent is root B (3), not root A (1).
+        import sqlite3
+        conn = sqlite3.connect(db)
+        query = "SELECT id, body, parent_id FROM notes ORDER BY id"
+        rows = conn.execute(query).fetchall()
+        assert rows[3] == (4, "child B", 3)
