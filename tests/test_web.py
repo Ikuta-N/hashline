@@ -123,3 +123,23 @@ class TestStatic:
         response = client.get("/static/htmx.min.js")
         assert response.status_code == 200
         assert "htmx" in response.text[:200]
+
+
+class TestNav:
+    def test_notes_is_current_on_index(self, client: TestClient) -> None:
+        response = client.get("/")
+        assert response.status_code == 200
+        assert 'href="/" class="current"' in response.text
+
+    @pytest.mark.parametrize("route, expected_href", [
+        ("/bib", 'href="/bib" class="current"'),
+        ("/import", 'href="/import" class="current"'),
+        ("/export", 'href="/export" class="current"'),
+    ])
+    def test_stubs_render_and_mark_current(
+        self, client: TestClient, route: str, expected_href: str
+    ) -> None:
+        response = client.get(route)
+        assert response.status_code == 200
+        assert expected_href in response.text
+        assert "coming" in response.text

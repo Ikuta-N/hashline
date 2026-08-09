@@ -46,6 +46,7 @@ def index(
         request=request,
         name="index.html",
         context={
+            "current_page": "notes",
             "q": q,
             "tag": tag,
             "tags": store.list_tags(limit=30),
@@ -114,3 +115,33 @@ def _timeline(
     else:
         found = store.list_notes(tag=filter_tag, limit=limit)
     return [(note, store.tags_for_note(note.id)) for note in found]
+
+
+@app.get("/bib", response_class=HTMLResponse)
+def bib(request: Request, store: StoreDep) -> HTMLResponse:
+    """Bibliography management (stub)."""
+    return templates.TemplateResponse(
+        request=request,
+        name="bib.html",
+        context={"current_page": "bib", "total": store.count_notes()},
+    )
+
+
+@app.get("/import", response_class=HTMLResponse)
+def import_(request: Request, store: StoreDep) -> HTMLResponse:
+    """Import notes from files (stub)."""
+    return templates.TemplateResponse(
+        request=request,
+        name="import.html",
+        context={"current_page": "import", "total": store.count_notes()},
+    )
+
+
+@app.get("/export", response_class=HTMLResponse)
+def export(request: Request, store: StoreDep) -> HTMLResponse:
+    """Export notes (stub)."""
+    return templates.TemplateResponse(
+        request=request,
+        name="export.html",
+        context={"current_page": "export", "total": store.count_notes()},
+    )
