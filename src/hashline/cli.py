@@ -332,7 +332,10 @@ def bib_import(
     if not path.exists():
         raise typer.BadParameter(f"no such file: {path}")
     # cli.py owns all filesystem I/O; bib.py never opens a file itself.
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise typer.BadParameter(f"could not read {path}: {exc}") from exc
     entries, problems = parse_bibtex(text)
     for problem in problems:
         typer.echo(f"skipped {problem}", err=True)

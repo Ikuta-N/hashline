@@ -571,7 +571,10 @@ def bib_import(
         try:
             text += p.read_text(encoding="utf-8") + "\n"
             source_names.append(str(p))
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
+            # UnicodeDecodeError subclasses ValueError, not OSError, so a
+            # latin-1 .bib file -- ordinary for BibTeX -- needs its own
+            # branch of this except clause to avoid a 500.
             return templates.TemplateResponse(
                 request=request,
                 name="import.html",

@@ -226,6 +226,23 @@ class TestBibImport:
         )
         assert result.exit_code != 0
 
+    def test_non_utf8_file_fails_with_a_readable_message(
+        self, db: Path, tmp_path: Path
+    ) -> None:
+        # Path.read_text(encoding="utf-8") raises UnicodeDecodeError, a
+        # ValueError subclass, on a latin-1 .bib file -- ordinary for
+        # BibTeX. It must come back as a BadParameter, not a traceback.
+        bib_file = tmp_path / "library.bib"
+        bib_file.write_bytes(
+            "@article{muller2020, author={Müller, Hans}, "
+            "title={Titel}}".encode("latin-1")
+        )
+        result = runner.invoke(
+            app, ["--db", str(db), "bib", "import", str(bib_file)]
+        )
+        assert result.exit_code != 0
+        assert "could not read" in result.output
+
     def test_replace_keeps_cited_entries(self, db: Path, tmp_path: Path) -> None:
         run(db, "bib", "import", str(BIB_FIXTURE))
         run(db, "read", "start", "smith2020")
