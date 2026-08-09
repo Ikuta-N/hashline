@@ -588,6 +588,30 @@ class TestReply:
             "htmx's submit listener fires"
         )
 
+    def test_reply_form_has_a_cancel_button(self, seeded: TestClient) -> None:
+        # hx-swap="afterend" leaves the reply form sitting under the note
+        # with no way to get rid of it short of submitting or reloading.
+        body = seeded.get("/notes/1/reply").text
+        cancel = re.search(r'<button type="button"[^>]*>\s*cancel\s*</button>', body)
+        assert cancel is not None, "reply fragment has no cancel button"
+        assert "this.closest('form').remove()" in cancel.group(0), (
+            "cancel button does not remove its own form"
+        )
+
+    def test_reply_textarea_dismisses_the_form_on_escape(
+        self, seeded: TestClient
+    ) -> None:
+        body = seeded.get("/notes/1/reply").text
+        textarea = re.search(r"<textarea\b[^>]*name=\"body\"[^>]*>", body)
+        assert textarea is not None
+        markup = textarea.group(0)
+        assert "Escape" in markup, (
+            "reply textarea's keydown handler does not dismiss on Escape"
+        )
+        assert ".remove()" in markup, (
+            "reply textarea's Escape handler does not remove the form"
+        )
+
     def test_reply_fragment_carries_citekey_roots_only_and_limit(
         self, client: TestClient, tmp_path: Path
     ) -> None:
