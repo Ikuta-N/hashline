@@ -53,6 +53,15 @@ _MIGRATIONS: Final[Mapping[int, str]] = {
 class SchemaVersionError(Exception):
     """The database was created by a newer version of the application."""
 
+
+class NoteHasReplies(Exception):
+    """Raised when deleting a note would take its replies with it."""
+
+    def __init__(self, note_id: int, reply_count: int) -> None:
+        super().__init__(f"note {note_id} has {reply_count} replies")
+        self.note_id = note_id
+        self.reply_count = reply_count
+
 _SCHEMA_PATH: Final = Path(__file__).with_name("schema.sql")
 
 _DB_ENV_VAR: Final = "HASHLINE_DB"
@@ -305,11 +314,32 @@ class Store:
                 (note_id, name),
             )
 
-    def delete_note(self, note_id: int) -> bool:
-        """Delete a note. Returns whether it existed."""
+    def delete_note(self, note_id: int, *, recursive: bool = False) -> int:
+        """Delete a note. Returns how many notes were removed (the subtree size).
+
+        If the note has replies and recursive is False, raises NoteHasReplies.
+        This guard is only at the application level; SQL deleting the note directly
+        will still cascade.
+        """
         with self._conn:
-            cursor = self._conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
-        return cursor.rowcount > 0
+            (exists,) = self._conn.execute(
+                "SELECT count(*) FROM notes WHERE id = ?", (note_id,)
+            ).fetchone()
+            if not exists:
+                return 0
+
+            (reply_count,) = self._conn.execute(
+                "SELECT count(*) FROM notes WHERE parent_id = ?", (note_id,)
+            ).fetchone()
+
+            if reply_count > 0 and not recursive:
+                raise NoteHasReplies(note_id, reply_count)
+
+            # Count the entire thread subtree before deleting.
+            count = len(self.thread(note_id))
+
+            self._conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+            return count
 
     # --- reading ---------------------------------------------------------
 
