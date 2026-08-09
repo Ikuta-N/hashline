@@ -167,7 +167,7 @@ class TestParseDocuments:
         doc1 = Document(source="a.md", text="- root A\n  - child A")
         doc2 = Document(source="b.md", text="- root B\n  - child B")
         drafts = parse_documents([doc1, doc2], mode="outline")
-        
+
         assert len(drafts) == 4
         assert drafts[0].body == "root A"
         assert drafts[0].parent_index is None

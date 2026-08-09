@@ -63,14 +63,14 @@ class TestAdd:
     ) -> None:
         run(db, "bib", "import", str(BIB_FIXTURE))
         run(db, "read", "start", "smith2020")
-        
+
         # Replace bibliography with an empty one
         empty_bib = tmp_path / "empty.bib"
         empty_bib.write_text("", encoding="utf-8")
         runner.invoke(
             app, ["--db", str(db), "bib", "import", str(empty_bib), "--replace"]
         )
-        
+
         # Adding a note should now fail with a nice error
         result = runner.invoke(app, ["--db", str(db), "add", "a note"])
         assert result.exit_code != 0
@@ -230,11 +230,11 @@ class TestBibImport:
         run(db, "bib", "import", str(BIB_FIXTURE))
         run(db, "read", "start", "smith2020")
         run(db, "add", "note that cites the work")
-        
+
         # Replace with an empty bibliography
         empty_bib = tmp_path / "empty.bib"
         empty_bib.write_text("", encoding="utf-8")
-        
+
         result = runner.invoke(
             app, ["--db", str(db), "bib", "import", str(empty_bib), "--replace"]
         )
@@ -356,6 +356,7 @@ class TestRead:
         run(db, "read", "start", "smith2020")
         output = run(db, "add", "a note", "--page", page)
         assert page in output
+
 
 class TestReply:
     def test_reply_attaches_to_parent(self, db: Path) -> None:
@@ -495,6 +496,7 @@ class TestExport:
         # root A is 1, child A is 2, root B is 3, child B is 4.
         # Check child B's parent is root B (3), not root A (1).
         import sqlite3
+
         conn = sqlite3.connect(db)
         query = "SELECT id, body, parent_id FROM notes ORDER BY id"
         rows = conn.execute(query).fetchall()

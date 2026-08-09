@@ -169,6 +169,7 @@ class TestFilters:
         assert 'name="citekey" value="testkey"' in body
         assert 'name="roots_only" value="true" checked' in body
 
+
 class TestCreateNote:
     def test_stores_the_note_and_returns_the_timeline(self, client: TestClient) -> None:
         response = client.post("/notes", data={"body": "新しいメモ #web"})
@@ -273,7 +274,7 @@ class TestThreadView:
             store.add_note("grandchild", parent_id=2)
             store.add_note("child 2", parent_id=1)
             store.add_note("unrelated")
-            
+
         response = client.get("/notes/1/thread")
         assert response.status_code == 200
         body = response.text
@@ -310,8 +311,8 @@ class TestDeleteNote:
         response = client.post("/notes/1/delete")
         assert response.status_code == 200
         assert "note 1 has 1 reply" in response.text
-        assert "parent" in response.text # keeps the note
-        assert 'name="recursive" value="true"' in response.text # offers recursive
+        assert "parent" in response.text  # keeps the note
+        assert 'name="recursive" value="true"' in response.text  # offers recursive
         assert 'class="error"' in response.text
         # The reader of this message has a button, not a command-line flag.
         assert "--recursive" not in response.text
@@ -340,20 +341,6 @@ class TestNav:
         response = client.get("/")
         assert response.status_code == 200
         assert 'href="/" class="current"' in response.text
-
-    @pytest.mark.parametrize(
-        "route, expected_href",
-        [
-            ("/export", 'href="/export" class="current"'),
-        ],
-    )
-    def test_stubs_render_and_mark_current(
-        self, client: TestClient, route: str, expected_href: str
-    ) -> None:
-        response = client.get(route)
-        assert response.status_code == 200
-        assert expected_href in response.text
-        assert "coming" in response.text
 
 
 class TestContext:
@@ -458,6 +445,7 @@ class TestContext:
         assert "research" not in response.text
         assert 'name="citekey"' in response.text
 
+
 class TestBib:
     def test_bib_list_empty(self, client: TestClient) -> None:
         response = client.get("/bib")
@@ -467,17 +455,19 @@ class TestBib:
 
     def test_bib_list_with_entries(self, client: TestClient, tmp_path: Path) -> None:
         with Store.open(tmp_path / "hashline.db") as store:
-            store.upsert_bib_entries([
-                BibEntry(
-                    citekey="smith2020",
-                    entry_type="article",
-                    title="A title",
-                    author="Smith",
-                    year="2020",
-                    raw="...",
-                    tag="smith2020",
-                )
-            ])
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="A title",
+                        author="Smith",
+                        year="2020",
+                        raw="...",
+                        tag="smith2020",
+                    )
+                ]
+            )
         response = client.get("/bib")
         assert response.status_code == 200
         assert "smith2020" in response.text
@@ -486,17 +476,19 @@ class TestBib:
 
     def test_bib_detail_found(self, client: TestClient, tmp_path: Path) -> None:
         with Store.open(tmp_path / "hashline.db") as store:
-            store.upsert_bib_entries([
-                BibEntry(
-                    citekey="smith2020",
-                    entry_type="article",
-                    title="A title",
-                    author="Smith",
-                    year="2020",
-                    raw="RAW_BIBTEX_CONTENT",
-                    tag="smith2020",
-                )
-            ])
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="A title",
+                        author="Smith",
+                        year="2020",
+                        raw="RAW_BIBTEX_CONTENT",
+                        tag="smith2020",
+                    )
+                ]
+            )
         response = client.get("/bib/smith2020")
         assert response.status_code == 200
         assert "RAW_BIBTEX_CONTENT" in response.text
@@ -505,6 +497,7 @@ class TestBib:
     def test_bib_detail_not_found(self, client: TestClient) -> None:
         response = client.get("/bib/unknown")
         assert response.status_code == 404
+
 
 class TestImport:
     def test_import_notes_path(self, client: TestClient, tmp_path: Path) -> None:
@@ -618,12 +611,12 @@ class TestExport:
 
     def test_export_download_thread(self, seeded: TestClient, tmp_path: Path) -> None:
         with Store.open(tmp_path / "hashline.db") as store:
-            note_id = store.add_note("parent")
-            store.add_note("child", parent_id=note_id)
-        response = seeded.get("/export/download", params={"root": note_id})
+            parent = store.add_note("parent")
+            store.add_note("child", parent_id=parent.id)
+        response = seeded.get("/export/download", params={"root": parent.id})
         assert response.status_code == 200
         assert response.headers["Content-Disposition"] == (
-            f'attachment; filename="thread_{note_id}.md"'
+            f'attachment; filename="thread_{parent.id}.md"'
         )
         assert "parent" in response.text
         assert "child" in response.text
@@ -633,3 +626,76 @@ class TestExport:
         assert response.headers["Content-Disposition"] == (
             'attachment; filename="export_t_c.md"'
         )
+
+    def test_export_preview_invalid_root(self, client: TestClient) -> None:
+        response = client.get("/export", params={"root": 999})
+        assert response.status_code == 200
+
+    def test_export_download_invalid_root(self, client: TestClient) -> None:
+        response = client.get("/export/download", params={"root": 999})
+        assert response.status_code == 400
+
+    def test_delete_note_not_found(self, client: TestClient) -> None:
+        response = client.post("/notes/999/delete")
+        assert response.status_code == 200
+        assert "note 999 not found" in response.text
+
+    def test_get_import(self, client: TestClient) -> None:
+        response = client.get("/import")
+        assert response.status_code == 200
+        assert "Import Notes" in response.text
+
+    def test_import_notes_read_error(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        notes_file = tmp_path / "notes.txt"
+        notes_file.write_text("a note\n")
+        from hashline.web import app
+
+        def mock_read(*args, **kwargs):
+            raise FileNotFoundError("permission denied")
+
+        monkeypatch.setattr(app, "read_documents", mock_read)
+        response = client.post("/import", data={"path": str(notes_file)})
+        assert response.status_code == 200
+        assert "permission denied" in response.text
+
+    def test_import_notes_parse_error(self, client: TestClient) -> None:
+        files = {"files": ("notes.txt", b"- not a valid outline\n")}
+        response = client.post("/import", data={"mode": "outline"}, files=files)
+        assert response.status_code == 200
+
+    def test_import_bib_read_error(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bib_file = tmp_path / "library.bib"
+        bib_file.write_text("")
+
+        original_read_text = Path.read_text
+
+        def mock_read_text(self: Path, *args, **kwargs) -> str:
+            if self.name == "library.bib":
+                raise OSError("I/O error")
+            return original_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", mock_read_text)
+        response = client.post("/bib/import", data={"path": str(bib_file)})
+        assert response.status_code == 200
+        assert "could not read" in response.text
+
+    def test_import_bib_kept(self, seeded: TestClient, tmp_path: Path) -> None:
+        from hashline.bib import BibEntry
+
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [BibEntry("smith2020", "article", "@article{smith2020}")]
+            )
+            store.add_note("A note citing [@smith2020]", citekey="smith2020")
+
+        bib_file = tmp_path / "library.bib"
+        bib_file.write_text("@article{other, title={New title}}")
+        response = seeded.post(
+            "/bib/import", data={"path": str(bib_file), "replace": "true"}
+        )
+        assert response.status_code == 200
+        assert "kept 1 entries still cited" in response.text

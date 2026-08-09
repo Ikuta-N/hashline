@@ -52,25 +52,25 @@ def decode_uploads(
     items: Iterable[tuple[str, bytes]],
 ) -> tuple[list[Document], list[str]]:
     """Decode uploaded files, filtering by suffix.
-    
+
     Returns the decoded documents plus a list of problems for files that
     had the wrong suffix or could not be decoded as UTF-8.
     """
     documents: list[Document] = []
     skipped: list[str] = []
-    
+
     for filename, content in items:
         path = Path(filename)
         if path.suffix.lower() not in TEXT_SUFFIXES:
             skipped.append(f"{filename}: not a text or markdown file")
             continue
-            
+
         try:
             text = content.decode("utf-8")
         except UnicodeDecodeError as exc:
             skipped.append(f"{filename}: {exc}")
             continue
-            
+
         documents.append(Document(source=filename, text=text))
-        
+
     return documents, skipped

@@ -24,7 +24,6 @@ _BODY_WIDTH: Final = 90
 _WHITESPACE_RE: Final = re.compile(r"\s+")
 
 
-
 class Mode(StrEnum):
     """How an imported document is cut into notes."""
 

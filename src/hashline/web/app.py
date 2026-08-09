@@ -82,6 +82,7 @@ def index(
         context=context_data,
     )
 
+
 @app.get("/notes", response_class=HTMLResponse)
 def notes_fragment(
     request: Request,
@@ -186,16 +187,16 @@ def thread(
         found = store.thread(note_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Note not found") from exc
-        
+
     def flatten(
         roots: Sequence[OutlineNode], depth: int = 0
     ) -> Iterator[tuple[Note, list[str], int]]:
         for root in roots:
             yield root.note, store.tags_for_note(root.note.id), depth
             yield from flatten(root.children, depth + 1)
-            
+
     items = list(flatten(build_tree(found)))
-    
+
     return templates.TemplateResponse(
         request=request,
         name="_timeline.html",
@@ -205,6 +206,7 @@ def thread(
             "tag": "",
         },
     )
+
 
 @app.post("/notes/{note_id}/delete", response_class=HTMLResponse)
 def delete_note(
@@ -264,18 +266,18 @@ def _timeline(
         # Ranked list and tree are different things -- render search results FLAT.
         found = [hit.note for hit in store.search_notes(q, tag=filter_tag, limit=limit)]
         return [(note, store.tags_for_note(note.id), 0) for note in found]
-        
+
     found = store.list_notes(
         tag=filter_tag, citekey=filter_citekey, roots_only=roots_only, limit=limit
     )
-    
+
     def flatten(
         roots: Sequence[OutlineNode], depth: int = 0
     ) -> Iterator[tuple[Note, list[str], int]]:
         for root in roots:
             yield root.note, store.tags_for_note(root.note.id), depth
             yield from flatten(root.children, depth + 1)
-            
+
     return list(flatten(build_tree(found)))
 
 
@@ -373,7 +375,7 @@ def bib_detail(request: Request, citekey: str, store: StoreDep) -> HTMLResponse:
     entry = store.get_bib_entry(citekey)
     if entry is None:
         raise HTTPException(status_code=404, detail="Citekey not found")
-    
+
     return templates.TemplateResponse(
         request=request,
         name="bib_detail.html",
@@ -452,7 +454,9 @@ def import_notes(
     try:
         valid_mode = mode if mode in {"line", "heading", "outline"} else "line"
         drafts = parse_documents(
-            documents, mode=valid_mode, common_tags=tag_list  # type: ignore[arg-type]
+            documents,
+            mode=valid_mode,  # type: ignore[arg-type]
+            common_tags=tag_list,
         )
     except ValueError as exc:
         return templates.TemplateResponse(

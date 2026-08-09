@@ -79,9 +79,7 @@ def _build_v1_db(conn: sqlite3.Connection) -> None:
 
 
 class TestMigration:
-    def test_v1_database_gains_new_columns(
-        self, tmp_path: Path
-    ) -> None:
+    def test_v1_database_gains_new_columns(self, tmp_path: Path) -> None:
         db = tmp_path / "test.db"
         conn = sqlite3.connect(db)
         _build_v1_db(conn)
@@ -96,9 +94,7 @@ class TestMigration:
             assert "citekey" in cols
             assert "parent_id" in cols
 
-    def test_pre_existing_note_survives_migration(
-        self, tmp_path: Path
-    ) -> None:
+    def test_pre_existing_note_survives_migration(self, tmp_path: Path) -> None:
         db = tmp_path / "test.db"
         conn = sqlite3.connect(db)
         _build_v1_db(conn)
@@ -109,9 +105,7 @@ class TestMigration:
             assert len(notes) == 1
             assert notes[0].body == "hello #test"
 
-    def test_pre_existing_note_is_still_searchable(
-        self, tmp_path: Path
-    ) -> None:
+    def test_pre_existing_note_is_still_searchable(self, tmp_path: Path) -> None:
         db = tmp_path / "test.db"
         conn = sqlite3.connect(db)
         _build_v1_db(conn)
@@ -131,9 +125,7 @@ class TestMigration:
             (version,) = store._conn.execute("PRAGMA user_version").fetchone()
             assert version == SCHEMA_VERSION
 
-    def test_reopening_after_migration_is_idempotent(
-        self, tmp_path: Path
-    ) -> None:
+    def test_reopening_after_migration_is_idempotent(self, tmp_path: Path) -> None:
         db = tmp_path / "test.db"
         conn = sqlite3.connect(db)
         _build_v1_db(conn)
@@ -148,9 +140,7 @@ class TestMigration:
             (version,) = store._conn.execute("PRAGMA user_version").fetchone()
             assert version == SCHEMA_VERSION
 
-    def test_future_version_raises_schema_version_error(
-        self, tmp_path: Path
-    ) -> None:
+    def test_future_version_raises_schema_version_error(self, tmp_path: Path) -> None:
         db = tmp_path / "test.db"
         conn = sqlite3.connect(db)
         conn.execute("PRAGMA foreign_keys = ON")
@@ -181,11 +171,12 @@ class TestMigration:
         conn.close()
 
         from hashline.store import _MIGRATIONS
+
         original_sql = _MIGRATIONS[2]
         # Insert a syntax error halfway through the migration
         broken_sql = original_sql.replace(
             "ALTER TABLE notes ADD COLUMN citekey TEXT",
-            "SYNTAX ERROR BOOM;\nALTER TABLE notes ADD COLUMN citekey TEXT"
+            "SYNTAX ERROR BOOM;\nALTER TABLE notes ADD COLUMN citekey TEXT",
         )
         monkeypatch.setitem(_MIGRATIONS, 2, broken_sql)
 
