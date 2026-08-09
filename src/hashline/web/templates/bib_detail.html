@@ -4,7 +4,7 @@
 <div class="stack">
   <div style="display: flex; justify-content: space-between; align-items: flex-start;">
     <h2>{{ entry.citekey }}</h2>
-    <form method="post" action="/context/read" style="margin: 0;">
+    <form hx-post="/context/read" hx-target="#context-strip" hx-swap="outerHTML" style="margin: 0;">
       <input type="hidden" name="citekey" value="{{ entry.citekey }}">
       <button type="submit">Read this entry</button>
     </form>
