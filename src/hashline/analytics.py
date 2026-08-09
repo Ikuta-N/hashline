@@ -186,3 +186,113 @@ def tag_trend(store: Store, *, freq: str = "W", top: int = 10) -> pd.DataFrame:
     wide = wide.rename_axis("period")
     wide.columns.name = "tag"
     return wide
+
+
+def reading_summary(store: Store) -> pd.DataFrame:
+    """One row per citekey that has at least one note, indexed by citekey.
+
+    Columns: ``title`` (from :meth:`Store.list_bib_entries`, object, may be
+    ``None``), ``note_count`` (int64), ``first_note_at`` and ``last_note_at``
+    (tz-aware UTC datetime64), and ``pages`` (object: an ordered,
+    de-duplicated ``list[str]`` of every page value recorded against that
+    citekey, in the order the notes were written).
+
+    Pages are free-form strings (``"12-15"``, ``"xii"``, ``"第3章"``) -- they
+    are never coerced to numbers and no range is computed, only collected.
+
+    A citekey in the bibliography with no notes never appears. An empty
+    result (no notes reference a citekey) gives an empty frame with these
+    dtypes.
+    """
+    import pandas as pd
+
+    notes = notes_frame(store)
+    titles = {entry.citekey: entry.title for entry in store.list_bib_entries()}
+
+    cited = notes.dropna(subset=["citekey"]).sort_values(["citekey", "created_at"])
+
+    citekeys: list[str] = []
+    row_titles: list[str | None] = []
+    counts: list[int] = []
+    firsts: list[pd.Timestamp] = []
+    lasts: list[pd.Timestamp] = []
+    pages: list[list[str]] = []
+
+    for citekey, group in cited.groupby("citekey", sort=True):
+        seen: list[str] = []
+        for page in group["page"]:
+            if page is not None and page not in seen:
+                seen.append(page)
+        citekeys.append(str(citekey))
+        row_titles.append(titles.get(str(citekey)))
+        counts.append(len(group))
+        firsts.append(group["created_at"].min())
+        lasts.append(group["created_at"].max())
+        pages.append(seen)
+
+    return pd.DataFrame(
+        {
+            "citekey": pd.Series(citekeys, dtype="object"),
+            "title": pd.Series(row_titles, dtype="object"),
+            "note_count": pd.Series(counts, dtype="int64"),
+            "first_note_at": pd.Series(firsts, dtype="datetime64[ns, UTC]"),
+            "last_note_at": pd.Series(lasts, dtype="datetime64[ns, UTC]"),
+            "pages": pd.Series(pages, dtype="object"),
+        }
+    ).set_index("citekey")
+
+
+def thread_summary(store: Store) -> pd.DataFrame:
+    """One row per root note in the whole store, indexed by the root's id.
+
+    Columns: ``reply_count`` (int64, every descendant in the subtree, not
+    just direct children), ``max_depth`` (int64, 0 for a root with no
+    replies), and ``first_note_at``/``last_note_at`` (tz-aware UTC
+    datetime64, spanning the root and every descendant). A note with no
+    replies is a thread of one: ``reply_count`` 0, ``max_depth`` 0.
+
+    Built on :func:`hashline.outline.build_tree`, which already forms this
+    forest and promotes a note whose parent is missing to a root -- this
+    function walks the tree it returns rather than ``notes.parent_id``
+    itself.
+    """
+    from datetime import datetime
+
+    import pandas as pd
+
+    from hashline.outline import OutlineNode, build_tree
+
+    notes = store.list_notes(limit=-1)
+
+    def _subtree(node: OutlineNode) -> list[tuple[datetime, int]]:
+        members = [(node.note.created_at, 0)]
+        for child in node.children:
+            members.extend(
+                (created_at, depth + 1) for created_at, depth in _subtree(child)
+            )
+        return members
+
+    root_ids: list[int] = []
+    reply_counts: list[int] = []
+    max_depths: list[int] = []
+    firsts: list[datetime] = []
+    lasts: list[datetime] = []
+
+    for root in build_tree(notes):
+        members = _subtree(root)
+        timestamps = [created_at for created_at, _ in members]
+        root_ids.append(root.note.id)
+        reply_counts.append(len(members) - 1)
+        max_depths.append(max(depth for _, depth in members))
+        firsts.append(min(timestamps))
+        lasts.append(max(timestamps))
+
+    return pd.DataFrame(
+        {
+            "root_id": pd.Series(root_ids, dtype="int64"),
+            "reply_count": pd.Series(reply_counts, dtype="int64"),
+            "max_depth": pd.Series(max_depths, dtype="int64"),
+            "first_note_at": pd.Series(firsts, dtype="datetime64[ns, UTC]"),
+            "last_note_at": pd.Series(lasts, dtype="datetime64[ns, UTC]"),
+        }
+    ).set_index("root_id")
