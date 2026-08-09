@@ -25,6 +25,9 @@ TEXT_SUFFIXES: Final = frozenset({".md", ".markdown", ".txt"})
 _BODY_WIDTH: Final = 90
 _WHITESPACE_RE: Final = re.compile(r"\s+")
 
+#: The tag `read start` pins alongside a citekey, unless --tag overrides it.
+_DEFAULT_READING_TAG: Final = "reading"
+
 
 class Mode(StrEnum):
     """How an imported document is cut into notes."""
@@ -63,11 +66,40 @@ def add(
         list[str] | None,
         typer.Option("--tag", "-t", help="Extra tag; repeatable."),
     ] = None,
+    page: Annotated[
+        str | None,
+        typer.Option("--page", help="Page reference; requires a pinned citekey."),
+    ] = None,
+    no_context: Annotated[
+        bool,
+        typer.Option(
+            "--no-context", help="Ignore the pinned context for this note."
+        ),
+    ] = False,
 ) -> None:
-    """Store one note."""
+    """Store one note.
+
+    Routes through ``add_note_with_context`` so a pinned reading context
+    (see ``hashline read start``) applies automatically, unless
+    ``--no-context`` asks for a plain note instead.
+    """
     with _open(ctx) as store:
         try:
-            note = store.add_note(text, extra_tags=tag or ())
+            if no_context:
+                if page is not None:
+                    raise typer.BadParameter(
+                        "--page requires a pinned citekey; --no-context has none"
+                    )
+                note = store.add_note(text, extra_tags=tag or ())
+            else:
+                if page is not None and store.get_context().citekey is None:
+                    raise typer.BadParameter(
+                        "--page requires a pinned citekey; "
+                        "see `hashline read start`"
+                    )
+                note = store.add_note_with_context(
+                    text, page=page, extra_tags=tag or ()
+                )
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
         typer.echo(_format_note(note, store.tags_for_note(note.id)))
@@ -79,11 +111,14 @@ def list_(
     tag: Annotated[
         str | None, typer.Option("--tag", "-t", help="Only this tag.")
     ] = None,
+    citekey: Annotated[
+        str | None, typer.Option("--citekey", "-c", help="Only this citekey.")
+    ] = None,
     limit: Annotated[int, typer.Option("--limit", "-n")] = 20,
 ) -> None:
     """Show the timeline, newest first."""
     with _open(ctx) as store:
-        notes = store.list_notes(tag=tag, limit=limit)
+        notes = store.list_notes(tag=tag, citekey=citekey, limit=limit)
         if not notes:
             typer.echo("no notes yet")
             return
@@ -252,6 +287,65 @@ def pin(
         typer.echo(_format_context(store.get_context()))
 
 
+read_app = typer.Typer(no_args_is_help=True, help="Pin the work you are reading.")
+app.add_typer(read_app, name="read")
+
+
+@read_app.command("start")
+def read_start(
+    ctx: typer.Context,
+    citekey: Annotated[
+        str, typer.Argument(help="A citekey from `hashline bib list`.")
+    ],
+    tag: Annotated[
+        str,
+        typer.Option("--tag", "-t", help="Extra tag pinned alongside the citekey."),
+    ] = _DEFAULT_READING_TAG,
+) -> None:
+    """Pin CITEKEY as the work being read.
+
+    Notes added afterward through ``add`` (without --no-context) carry both
+    the citekey's tag and this one automatically.
+    """
+    with _open(ctx) as store:
+        if store.get_bib_entry(citekey) is None:
+            raise typer.BadParameter(
+                f"no bibliography entry for citekey {citekey!r}; "
+                "import it first with `hashline bib import`"
+            )
+        try:
+            normalized_tag = normalize_tag(tag)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        store.set_context(Context(tags=(normalized_tag,), citekey=citekey))
+        typer.echo(_format_read_status(store))
+
+
+@read_app.command("status")
+def read_status(ctx: typer.Context) -> None:
+    """Show the pinned work, if any."""
+    with _open(ctx) as store:
+        typer.echo(_format_read_status(store))
+
+
+@read_app.command("stop")
+def read_stop(ctx: typer.Context) -> None:
+    """Unpin the current context."""
+    with _open(ctx) as store:
+        store.clear_context()
+    typer.echo("context cleared")
+
+
+def _format_read_status(store: Store) -> str:
+    context = store.get_context()
+    if context.citekey is None:
+        return "nothing pinned"
+    entry = store.get_bib_entry(context.citekey)
+    title = entry.title if entry is not None and entry.title else "(no title)"
+    tags = ", ".join(context.tags) if context.tags else "(none)"
+    return f"{context.citekey}  {title}\ntags: {tags}"
+
+
 def collect_documents(
     paths: Iterable[Path],
 ) -> tuple[list[Document], list[str]]:
@@ -315,8 +409,17 @@ def _format_context(context: Context) -> str:
 
 def _format_note(note: Note, tag_names: Sequence[str]) -> str:
     stamp = note.created_at.astimezone().strftime("%Y-%m-%d %H:%M")
+    reference = _format_reference(note)
     suffix = f"  [{', '.join(tag_names)}]" if tag_names else ""
-    return f"{note.id:>5}  {stamp}  {_one_line(note.body)}{suffix}"
+    return f"{note.id:>5}  {stamp}  {_one_line(note.body)}{reference}{suffix}"
+
+
+def _format_reference(note: Note) -> str:
+    """The citekey and page a note is attached to, or "" when there is none."""
+    if note.citekey is None:
+        return ""
+    page = f" p.{note.page}" if note.page else ""
+    return f"  ({note.citekey}{page})"
 
 
 def _one_line(body: str) -> str:

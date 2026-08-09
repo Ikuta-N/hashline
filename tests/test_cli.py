@@ -40,6 +40,24 @@ class TestAdd:
         result = runner.invoke(app, ["--db", str(db), "add", "body", "-t", "two words"])
         assert result.exit_code != 0
 
+    def test_page_with_nothing_pinned_fails(self, db: Path) -> None:
+        result = runner.invoke(app, ["--db", str(db), "add", "body", "--page", "5"])
+        assert result.exit_code != 0
+
+    def test_no_context_bypasses_a_pinned_context(self, db: Path) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020")
+        output = run(db, "add", "bypass #own", "--no-context")
+        assert "own" in output
+        assert "reading" not in output
+        assert "smith2020" not in output
+
+    def test_no_context_with_page_fails(self, db: Path) -> None:
+        result = runner.invoke(
+            app, ["--db", str(db), "add", "body", "--page", "5", "--no-context"]
+        )
+        assert result.exit_code != 0
+
 
 class TestList:
     def test_newest_first(self, db: Path) -> None:
@@ -226,6 +244,61 @@ class TestPin:
     def test_an_unusable_tag_fails(self, db: Path) -> None:
         result = runner.invoke(app, ["--db", str(db), "pin", "two words"])
         assert result.exit_code != 0
+
+
+class TestRead:
+    def test_status_reports_nothing_pinned(self, db: Path) -> None:
+        assert "nothing pinned" in run(db, "read", "status")
+
+    def test_start_then_status_reports_the_work(self, db: Path) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020")
+        output = run(db, "read", "status")
+        assert "smith2020" in output
+        assert "A Survey of Trigram Indexing" in output
+        assert "reading" in output
+
+    def test_stop_unpins_the_work(self, db: Path) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020")
+        run(db, "read", "stop")
+        assert "nothing pinned" in run(db, "read", "status")
+
+    def test_start_with_an_unknown_citekey_fails(self, db: Path) -> None:
+        result = runner.invoke(app, ["--db", str(db), "read", "start", "nope"])
+        assert result.exit_code != 0
+
+    def test_start_with_an_unusable_tag_fails(self, db: Path) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        result = runner.invoke(
+            app,
+            ["--db", str(db), "read", "start", "smith2020", "--tag", "two words"],
+        )
+        assert result.exit_code != 0
+
+    def test_custom_tag_replaces_the_default(self, db: Path) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020", "--tag", "annotating")
+        output = run(db, "read", "status")
+        assert "annotating" in output
+        assert "reading" not in output
+
+    def test_a_note_added_while_reading_carries_both_tags_and_is_unchanged(
+        self, db: Path
+    ) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020")
+        output = run(db, "add", "序論の主張が弱い")
+        assert "序論の主張が弱い" in output
+        assert "reading" in output
+        assert "smith2020" in output
+
+    @pytest.mark.parametrize("page", ["12-15", "xii", "第3章"])
+    def test_page_is_stored_verbatim(self, db: Path, page: str) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020")
+        output = run(db, "add", "a note", "--page", page)
+        assert page in output
 
 
 class TestCollectDocuments:
