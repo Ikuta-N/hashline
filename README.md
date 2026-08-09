@@ -178,7 +178,10 @@ uv run uvicorn hashline.web.app:app --reload
 
 Capture, tag filtering and search-as-you-type over the same database the CLI
 uses; it honours `$HASHLINE_DB`. HTMX is vendored under
-`src/hashline/web/static/`, so the page needs no CDN and works offline.
+`src/hashline/web/static/`, so the page needs no CDN and works offline. The
+vendored build is htmx 2.0.4 (`htmx.min.js`, ~50 KB), licensed 0BSD, which
+carries no attribution requirement — update the file by hand when a new
+version is needed.
 
 ### Feature Parity
 
