@@ -1693,6 +1693,114 @@ class TestExport:
             "the chip's dismiss link still carries the root filter"
         )
 
+    def test_export_tag_is_a_select_populated_from_the_store(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        # A free-text box lets a typo silently export nothing; a <select>
+        # can only offer tags that actually exist.
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("a #sqlite note")
+            store.add_note("another #sqlite note")
+            store.add_note("a #web note")
+        body = client.get("/export").text
+        select = re.search(r'<select name="tag"[^>]*>.*?</select>', body, re.S)
+        assert select is not None, "tag is not rendered as a <select>"
+        markup = select.group(0)
+        assert re.search(r'<option value=""[^>]*>', markup), (
+            "no empty-value 'all' option found in the tag select"
+        )
+        assert "sqlite (2)" in markup
+        assert "web (1)" in markup
+
+    def test_export_citekey_select_shows_titles(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="A Title",
+                        tag="smith2020",
+                    )
+                ]
+            )
+        body = client.get("/export").text
+        select = re.search(r'<select name="citekey"[^>]*>.*?</select>', body, re.S)
+        assert select is not None, "citekey is not rendered as a <select>"
+        markup = select.group(0)
+        assert '<option value="smith2020"' in markup
+        assert "A Title" in markup
+
+    def test_export_select_marks_the_current_filter_selected(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="A Title",
+                        tag="smith2020",
+                    )
+                ]
+            )
+            store.add_note("a #sqlite note")
+        body = client.get(
+            "/export", params={"tag": "sqlite", "citekey": "smith2020"}
+        ).text
+        assert re.search(
+            r'<option value="sqlite"[^>]*selected[^>]*>', body
+        ), "the tag currently filtered on is not marked selected"
+        assert re.search(
+            r'<option value="smith2020"[^>]*selected[^>]*>', body
+        ), "the citekey currently filtered on is not marked selected"
+
+    def test_export_preview_trigger_covers_the_selects(
+        self, client: TestClient
+    ) -> None:
+        # <select> is not an <input>, so "input from:input, change from:input"
+        # alone stops matching the moment Tag/Citekey become dropdowns --
+        # changing either would silently stop refreshing the preview.
+        body = client.get("/export").text
+        form = re.search(r'<form hx-get="/export"[^>]*>', body)
+        assert form is not None, "export preview form not found"
+        trigger = re.search(r'hx-trigger="([^"]*)"', form.group(0))
+        assert trigger is not None, "export preview form has no hx-trigger"
+        assert "select" in trigger.group(1), (
+            f"hx-trigger {trigger.group(1)!r} does not mention select, so "
+            f"choosing a tag or citekey from the dropdown will not refresh "
+            f"the preview"
+        )
+
+    def test_download_form_hidden_fields_carry_the_selected_tag_and_citekey(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="A Title",
+                        tag="smith2020",
+                    )
+                ]
+            )
+            store.add_note("a #sqlite note")
+        body = client.get(
+            "/export", params={"tag": "sqlite", "citekey": "smith2020"}
+        ).text
+        download_form = re.search(
+            r'<form method="get" action="/export/download".*?</form>', body, re.S
+        )
+        assert download_form is not None, "download form not found"
+        markup = download_form.group(0)
+        assert 'name="tag" value="sqlite"' in markup
+        assert 'name="citekey" value="smith2020"' in markup
+
     def test_export_download_success(self, seeded: TestClient) -> None:
         response = seeded.get("/export/download", params={"tag": "sqlite"})
         assert response.status_code == 200

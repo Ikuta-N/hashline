@@ -755,9 +755,10 @@ def export(
             "root": root,
             "markdown": markdown,
             "error": error,
+            "tags": store.list_tags(),
+            "bib_entries": store.list_bib_entries(),
         },
     )
-
 
 
 
