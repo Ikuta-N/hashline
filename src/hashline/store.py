@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
@@ -17,7 +17,35 @@ from typing import Final
 from hashline.models import Note, NoteDraft, SearchHit, TagCount
 from hashline.tags import extract_tags, normalize_tag
 
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
+
+_MIGRATIONS: Final[Mapping[int, str]] = {
+    2: (
+        "CREATE TABLE IF NOT EXISTS bib_entries ("
+        "  citekey TEXT PRIMARY KEY,"
+        "  tag TEXT NOT NULL,"
+        "  entry_type TEXT NOT NULL,"
+        "  title TEXT,"
+        "  author TEXT,"
+        "  year TEXT,"
+        "  doi TEXT,"
+        "  raw TEXT NOT NULL,"
+        "  updated_at TEXT NOT NULL"
+        ");"
+        "CREATE TABLE IF NOT EXISTS app_state ("
+        "  key TEXT PRIMARY KEY,"
+        "  value TEXT NOT NULL"
+        ");"
+        "ALTER TABLE notes ADD COLUMN page TEXT;"
+        "ALTER TABLE notes ADD COLUMN citekey TEXT REFERENCES bib_entries(citekey);"
+        "CREATE INDEX IF NOT EXISTS idx_bib_entries_tag ON bib_entries(tag);"
+        "CREATE INDEX IF NOT EXISTS idx_notes_citekey ON notes(citekey);"
+    ),
+}
+
+
+class SchemaVersionError(Exception):
+    """The database was created by a newer version of the application."""
 
 _SCHEMA_PATH: Final = Path(__file__).with_name("schema.sql")
 
@@ -119,11 +147,36 @@ class Store:
         return store
 
     def init_schema(self) -> None:
-        """Create the schema if it is missing. Safe to call on an existing database."""
-        self._conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+        """Create or migrate the schema.
+
+        Fresh databases get everything from ``schema.sql`` and are stamped with
+        the current :data:`SCHEMA_VERSION`.  Existing databases whose version
+        is behind get each intermediate migration applied in order, each in its
+        own transaction.  A database from a *newer* version raises
+        :class:`SchemaVersionError` so we never silently damage it.
+
+        ``schema.sql`` is only run on databases that have never been versioned
+        (``user_version == 0``), because it references the latest column set
+        and would fail on an older schema that is missing columns.
+        """
         (current,) = self._conn.execute("PRAGMA user_version").fetchone()
+
         if current == 0:
+            # Brand-new database: schema.sql contains the full current schema.
+            self._conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            return
+
+        if current > SCHEMA_VERSION:
+            raise SchemaVersionError(
+                f"database is version {current}, but this build only "
+                f"knows up to version {SCHEMA_VERSION}"
+            )
+
+        for version in range(current + 1, SCHEMA_VERSION + 1):
+            sql = _MIGRATIONS[version]
+            self._conn.executescript(sql)
+            self._conn.execute(f"PRAGMA user_version = {version}")
 
     def close(self) -> None:
         self._conn.close()
