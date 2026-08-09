@@ -100,6 +100,47 @@ class TestParseBibtex:
         entries, _ = parse_bibtex(text)
         assert entries[0].entry_type == "article"
 
+    def test_skips_a_comment_entry_that_has_a_trailing_comma(self) -> None:
+        """A @comment or @string block only reaches the type filter if it
+        happens to be shaped like ``@type{token,`` -- most real exports (see
+        the fixture) are not, and never even match as a raw entry. This
+        covers the filter itself for the rare export that is shaped that way.
+        """
+        entries, problems = parse_bibtex("@comment{c1, ignored text}")
+        assert entries == []
+        assert problems == []
+
+    def test_an_unconvertible_citekey_is_reported_as_a_problem(self) -> None:
+        entries, problems = parse_bibtex("@article{:::, title = {X}}")
+        assert entries == []
+        assert len(problems) == 1
+        assert ":::" in problems[0]
+
+    def test_a_field_with_no_name_stops_that_entrys_field_parsing(self) -> None:
+        """A leading ``=`` before any field name reads as an empty name,
+        which halts parsing of the remaining fields in that entry."""
+        entries, _ = parse_bibtex(
+            "@article{key8, = {x}, title = {After Bad Field}}"
+        )
+        assert entries[0].title is None
+
+    def test_a_bare_token_with_no_assignment_stops_field_parsing(self) -> None:
+        entries, _ = parse_bibtex("@article{key6, year}")
+        assert entries[0].year is None
+
+    def test_a_field_missing_its_value_stops_field_parsing(self) -> None:
+        entries, _ = parse_bibtex("@article{key7, title =}")
+        assert entries[0].title is None
+
+    def test_bare_unquoted_values_are_read_as_tokens(self) -> None:
+        """Not every export braces or quotes every field; a bare token like
+        an unquoted year must still be read as a value."""
+        entries, _ = parse_bibtex(
+            "@article{key9, title = {Bare Value Test}, year = 2020}"
+        )
+        assert entries[0].title == "Bare Value Test"
+        assert entries[0].year == "2020"
+
 
 class TestCitekeyTag:
     def test_lowercases_and_replaces_colons(self) -> None:
@@ -119,6 +160,17 @@ class TestCitekeyTag:
 
     def test_simple_key(self) -> None:
         assert citekey_tag("smith2020") == "smith2020"
+
+    def test_returns_none_when_casefold_produces_a_non_word_character(
+        self,
+    ) -> None:
+        """``\\N{LATIN SMALL LETTER J WITH CARON}`` survives ``.lower()`` as a
+        single word character, so ``_BAD_TAG_CHARS`` leaves it alone -- but
+        ``normalize_tag``'s ``.casefold()`` decomposes it into ``j`` plus a
+        combining caron, which is not a word character. ``citekey_tag`` must
+        catch the resulting ``ValueError`` rather than let it escape.
+        """
+        assert citekey_tag("smithǰ2020") is None
 
 
 class TestCleanValue:
