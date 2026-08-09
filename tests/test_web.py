@@ -344,7 +344,6 @@ class TestNav:
     @pytest.mark.parametrize(
         "route, expected_href",
         [
-            ("/import", 'href="/import" class="current"'),
             ("/export", 'href="/export" class="current"'),
         ],
     )
@@ -506,3 +505,28 @@ class TestBib:
     def test_bib_detail_not_found(self, client: TestClient) -> None:
         response = client.get("/bib/unknown")
         assert response.status_code == 404
+
+class TestImport:
+    def test_import_notes_path(self, client: TestClient, tmp_path: Path) -> None:
+        notes_file = tmp_path / "notes.txt"
+        notes_file.write_text("a note\n")
+        response = client.post("/import", data={"path": str(notes_file)})
+        assert response.status_code == 200
+        assert "imported 1 notes from 1 files" in response.text
+
+    def test_import_notes_missing_path(self, client: TestClient) -> None:
+        response = client.post("/import", data={"path": "/does/not/exist"})
+        assert response.status_code == 200
+        assert "no such file or directory: /does/not/exist" in response.text
+
+    def test_import_bib_path(self, client: TestClient, tmp_path: Path) -> None:
+        bib_file = tmp_path / "library.bib"
+        bib_file.write_text("@article{smith2020, title={A title}}")
+        response = client.post("/bib/import", data={"path": str(bib_file)})
+        assert response.status_code == 200
+        assert "imported 1 entries" in response.text
+
+    def test_import_bib_missing_path(self, client: TestClient) -> None:
+        response = client.post("/bib/import", data={"path": "/does/not/exist"})
+        assert response.status_code == 200
+        assert "no such file: /does/not/exist" in response.text

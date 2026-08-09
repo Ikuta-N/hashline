@@ -9,11 +9,14 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Final
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from hashline.bib import parse_bibtex
+from hashline.files import decode_uploads, read_documents
+from hashline.importer import parse_documents
 from hashline.models import DEFAULT_READING_TAG, Context, Note
 from hashline.outline import OutlineNode, build_tree
 from hashline.store import NoteHasReplies, Store, default_db_path
@@ -371,11 +374,196 @@ def bib_detail(request: Request, citekey: str, store: StoreDep) -> HTMLResponse:
 
 @app.get("/import", response_class=HTMLResponse)
 def import_(request: Request, store: StoreDep) -> HTMLResponse:
-    """Import notes from files (stub)."""
+    """Import notes from files."""
     return templates.TemplateResponse(
         request=request,
         name="import.html",
         context={"current_page": "import", "total": store.count_notes()},
+    )
+
+
+@app.post("/import", response_class=HTMLResponse)
+def import_notes(
+    request: Request,
+    store: StoreDep,
+    path: str = Form(""),
+    files: list[UploadFile] = File([]),  # noqa: B008
+    mode: str = Form("line"),
+    tags: str = Form(""),
+    dry_run: bool = Form(False),
+) -> HTMLResponse:
+    documents = []
+    skipped = []
+
+    if path:
+        p = Path(path)
+        if not p.exists():
+            return templates.TemplateResponse(
+                request=request,
+                name="import.html",
+                context={
+                    "current_page": "import",
+                    "total": store.count_notes(),
+                    "error": f"no such file or directory: {path}",
+                },
+            )
+        try:
+            docs, skps = read_documents([p])
+            documents.extend(docs)
+            skipped.extend(skps)
+        except FileNotFoundError as exc:
+            return templates.TemplateResponse(
+                request=request,
+                name="import.html",
+                context={
+                    "current_page": "import",
+                    "total": store.count_notes(),
+                    "error": str(exc),
+                },
+            )
+
+    upload_items = [(f.filename, f.file.read()) for f in files if f.filename]
+    if upload_items:
+        docs, skps = decode_uploads(upload_items)
+        documents.extend(docs)
+        skipped.extend(skps)
+
+    if not documents and not path and not upload_items:
+        return templates.TemplateResponse(
+            request=request,
+            name="import.html",
+            context={
+                "current_page": "import",
+                "total": store.count_notes(),
+                "error": "Please provide a path or upload files.",
+            },
+        )
+
+    tag_list = tags.split() if tags else []
+    try:
+        valid_mode = mode if mode in {"line", "heading", "outline"} else "line"
+        drafts = parse_documents(
+            documents, mode=valid_mode, common_tags=tag_list  # type: ignore[arg-type]
+        )
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="import.html",
+            context={
+                "current_page": "import",
+                "total": store.count_notes(),
+                "error": str(exc),
+            },
+        )
+
+    if dry_run:
+        notice = f"would import {len(drafts)} notes from {len(documents)} files"
+    else:
+        stored = store.add_notes(drafts)
+        notice = f"imported {len(stored)} notes from {len(documents)} files"
+
+    return templates.TemplateResponse(
+        request=request,
+        name="import.html",
+        context={
+            "current_page": "import",
+            "total": store.count_notes(),
+            "notice": notice,
+            "skipped": skipped,
+        },
+    )
+
+
+@app.post("/bib/import", response_class=HTMLResponse)
+def bib_import(
+    request: Request,
+    store: StoreDep,
+    path: str = Form(""),
+    file: UploadFile | None = File(None),  # noqa: B008
+    replace: bool = Form(False),
+) -> HTMLResponse:
+    text = ""
+    source_name = ""
+
+    if path:
+        p = Path(path)
+        if not p.exists():
+            return templates.TemplateResponse(
+                request=request,
+                name="import.html",
+                context={
+                    "current_page": "import",
+                    "total": store.count_notes(),
+                    "error": f"no such file: {path}",
+                },
+            )
+        try:
+            text = p.read_text(encoding="utf-8")
+            source_name = str(p)
+        except OSError as exc:
+            return templates.TemplateResponse(
+                request=request,
+                name="import.html",
+                context={
+                    "current_page": "import",
+                    "total": store.count_notes(),
+                    "error": f"could not read {path}: {exc}",
+                },
+            )
+    elif file and file.filename:
+        try:
+            content = file.file.read()
+            text = content.decode("utf-8")
+            source_name = file.filename
+        except UnicodeDecodeError as exc:
+            return templates.TemplateResponse(
+                request=request,
+                name="import.html",
+                context={
+                    "current_page": "import",
+                    "total": store.count_notes(),
+                    "error": f"could not decode {file.filename}: {exc}",
+                },
+            )
+    else:
+        return templates.TemplateResponse(
+            request=request,
+            name="import.html",
+            context={
+                "current_page": "import",
+                "total": store.count_notes(),
+                "error": "Please provide a path or upload a .bib file.",
+            },
+        )
+
+    entries, problems = parse_bibtex(text)
+
+    if not entries and not problems:
+        return templates.TemplateResponse(
+            request=request,
+            name="import.html",
+            context={
+                "current_page": "import",
+                "total": store.count_notes(),
+                "error": "Parsed to nothing",
+            },
+        )
+
+    written, kept = store.upsert_bib_entries(entries, replace=replace)
+
+    notice = f"imported {written} entries from {source_name}"
+    if kept > 0:
+        notice += f" (kept {kept} entries still cited by notes)"
+
+    return templates.TemplateResponse(
+        request=request,
+        name="import.html",
+        context={
+            "current_page": "import",
+            "total": store.count_notes(),
+            "notice": notice,
+            "skipped": problems,
+        },
     )
 
 
