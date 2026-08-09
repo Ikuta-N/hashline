@@ -366,7 +366,16 @@ def read_context(
     else:
         try:
             tag_name = tag.strip() or DEFAULT_READING_TAG
-            store.set_context(Context(tags=(tag_name,), citekey=citekey))
+            # The context strip shows pinned tags and the pinned work as two
+            # independent things with separate clear buttons, so starting a
+            # read must add the reading tag, not replace what was pinned.
+            pinned_tags = store.get_context().tags
+            merged_tags = (
+                pinned_tags
+                if tag_name in pinned_tags
+                else (*pinned_tags, tag_name)
+            )
+            store.set_context(Context(tags=merged_tags, citekey=citekey))
         except ValueError as exc:
             error = str(exc)
     return templates.TemplateResponse(
