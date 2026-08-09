@@ -207,6 +207,21 @@ class TestBibImport:
         )
         assert result.exit_code != 0
 
+    def test_replace_keeps_cited_entries(self, db: Path, tmp_path: Path) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020")
+        run(db, "add", "note that cites the work")
+        
+        # Replace with an empty bibliography
+        empty_bib = tmp_path / "empty.bib"
+        empty_bib.write_text("", encoding="utf-8")
+        
+        result = runner.invoke(
+            app, ["--db", str(db), "bib", "import", str(empty_bib), "--replace"]
+        )
+        assert result.exit_code == 0
+        assert "kept 1 entries still cited by notes" in result.output
+
 
 class TestBibList:
     def test_lists_entries_by_citekey(self, db: Path) -> None:

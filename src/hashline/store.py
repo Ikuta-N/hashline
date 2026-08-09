@@ -607,20 +607,31 @@ class Store:
 
     def upsert_bib_entries(
         self, entries: Iterable[BibEntry], *, replace: bool = False
-    ) -> int:
+    ) -> tuple[int, int]:
         """Insert or update bibliography entries.
 
         Uses ``ON CONFLICT(citekey) DO UPDATE`` so re-importing a library
         refreshes rather than fails.  With ``replace=True`` the existing
         library is cleared first, in the same transaction as the insert, so a
         re-import that dropped entries does not leave the old ones behind.
-        Returns how many entries were written.
+        Returns a tuple of (written_count, kept_count).
         """
         stamp = _to_text(_utc_now())
-        count = 0
+        written = 0
+        kept = 0
         with self._conn:
             if replace:
-                self._conn.execute("DELETE FROM bib_entries")
+                cursor = self._conn.execute(
+                    "SELECT COUNT(*) FROM bib_entries WHERE citekey IN "
+                    "(SELECT citekey FROM notes WHERE citekey IS NOT NULL)"
+                )
+                kept = cursor.fetchone()[0]
+                self._conn.execute(
+                    "DELETE FROM bib_entries "
+                    "WHERE citekey NOT IN ("
+                    "SELECT citekey FROM notes WHERE citekey IS NOT NULL"
+                    ")"
+                )
             for entry in entries:
                 self._conn.execute(
                     "INSERT INTO bib_entries "
@@ -648,8 +659,8 @@ class Store:
                         stamp,
                     ),
                 )
-                count += 1
-        return count
+                written += 1
+        return written, kept
 
     def get_bib_entry(self, citekey: str) -> BibEntry | None:
         """Return a single bibliography entry, or ``None`` if unknown."""

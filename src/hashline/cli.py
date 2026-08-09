@@ -340,8 +340,10 @@ def bib_import(
     for problem in problems:
         typer.echo(f"skipped {problem}", err=True)
     with _open(ctx) as store:
-        count = store.upsert_bib_entries(entries, replace=replace)
-    typer.echo(f"imported {count} entries from {path}")
+        written, kept = store.upsert_bib_entries(entries, replace=replace)
+    if kept > 0:
+        typer.echo(f"kept {kept} entries still cited by notes", err=True)
+    typer.echo(f"imported {written} entries from {path}")
     if problems:
         typer.echo(f"skipped {len(problems)} entries")
 

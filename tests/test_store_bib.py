@@ -41,8 +41,9 @@ def _tanaka() -> BibEntry:
 
 class TestUpsertBibEntries:
     def test_inserts_entries(self, store: Store) -> None:
-        count = store.upsert_bib_entries([_smith(), _tanaka()])
-        assert count == 2
+        written, kept = store.upsert_bib_entries([_smith(), _tanaka()])
+        assert written == 2
+        assert kept == 0
 
     def test_re_import_updates_in_place(self, store: Store) -> None:
         store.upsert_bib_entries([_smith()])
@@ -61,7 +62,22 @@ class TestUpsertBibEntries:
         assert entry.title == "Updated Title"
 
     def test_empty_input_is_a_no_op(self, store: Store) -> None:
-        assert store.upsert_bib_entries([]) == 0
+        assert store.upsert_bib_entries([]) == (0, 0)
+
+    def test_replace_keeps_cited_entries(self, store: Store) -> None:
+        store.upsert_bib_entries([_smith(), _tanaka()])
+        store.add_note("A citation", citekey="smith2020")
+
+        # Now replace with a completely different library (empty for simplicity)
+        written, kept = store.upsert_bib_entries([], replace=True)
+        
+        assert written == 0
+        assert kept == 1
+        
+        # smith2020 should survive because it's cited
+        assert store.get_bib_entry("smith2020") is not None
+        # tanaka2019 should be gone because it's not cited
+        assert store.get_bib_entry("tanaka2019") is None
 
 
 class TestGetBibEntry:
