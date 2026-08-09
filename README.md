@@ -257,6 +257,10 @@ The `embeddings` table has been in the schema since the first release, so this n
 - Vectors are L2-normalized on write.
 - `embeddings.model` records the prefix convention (`intfloat/multilingual-e5-small+query`), not just the model name — e5-small is 384-wide exactly like the MiniLM model it replaced, so no dimension check could catch the two being mixed.
 
+That prefix is e5's: both the note and the search for it are embedded with
+`query: `, because finding notes that mean the same thing as a phrase is a
+symmetric task.
+
 ### What runs where
 
 - `ml/search.py` is pure numpy and imports no model runtime.
