@@ -6,7 +6,7 @@
   <div style="display: flex; justify-content: space-between; align-items: flex-start;">
     <h2>{{ entry.citekey }}</h2>
     <form hx-post="/context/read" hx-target="#context-strip" hx-swap="outerHTML" style="margin: 0;">
-      <input type="hidden" name="citekey" value="{{ entry.citekey }}">
+      <input type="hidden" name="context_citekey" value="{{ entry.citekey }}">
       <button type="submit">Read this entry</button>
     </form>
   </div>
