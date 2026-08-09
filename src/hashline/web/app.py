@@ -360,13 +360,17 @@ def get_context(request: Request, store: StoreDep) -> HTMLResponse:
 
 @app.post("/context/pin", response_class=HTMLResponse)
 def pin_context(
-    request: Request, store: StoreDep, tag: Annotated[str, Form()] = ""
+    request: Request,
+    store: StoreDep,
+    context_tag: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     """Set pinned tags and preserve the citekey."""
     error = None
     try:
         current = store.get_context()
-        store.set_context(Context(tags=tuple(tag.split()), citekey=current.citekey))
+        store.set_context(
+            Context(tags=tuple(context_tag.split()), citekey=current.citekey)
+        )
     except ValueError as exc:
         error = str(exc)
     return templates.TemplateResponse(
@@ -378,10 +382,11 @@ def pin_context(
 def read_context(
     request: Request,
     store: StoreDep,
-    citekey: Annotated[str, Form()],
-    tag: Annotated[str, Form()] = "",
+    context_citekey: Annotated[str, Form()],
+    context_tag: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     """Pin a citekey, optionally with a tag."""
+    citekey, tag = context_citekey, context_tag
     error = None
     if store.get_bib_entry(citekey) is None:
         error = (

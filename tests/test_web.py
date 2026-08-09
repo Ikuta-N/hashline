@@ -760,11 +760,11 @@ class TestContext:
         response = client.get("/context")
         assert response.status_code == 200
         assert "context-strip" in response.text
-        assert 'name="tag"' in response.text
-        assert 'name="citekey"' in response.text
+        assert 'name="context_tag"' in response.text
+        assert 'name="context_citekey"' in response.text
 
     def test_pin_tags(self, client: TestClient, tmp_path: Path) -> None:
-        response = client.post("/context/pin", data={"tag": "research urgent"})
+        response = client.post("/context/pin", data={"context_tag": "research urgent"})
         assert response.status_code == 200
         assert "research, urgent" in response.text
 
@@ -781,7 +781,7 @@ class TestContext:
         assert "research, urgent" in client.get("/context").text
 
     def test_pin_invalid_tag(self, client: TestClient) -> None:
-        response = client.post("/context/pin", data={"tag": "invalid@tag"})
+        response = client.post("/context/pin", data={"context_tag": "invalid@tag"})
         assert response.status_code == 200
         assert 'class="error"' in response.text
 
@@ -799,11 +799,16 @@ class TestContext:
                     )
                 ]
             )
-        client.post("/context/read", data={"citekey": "smith2020", "tag": "reading"})
-        client.post("/context/pin", data={"tag": "extra"})
+        client.post(
+            "/context/read",data={
+                    "context_citekey": "smith2020",
+                    "context_tag": "reading",
+                }
+        )
+        client.post("/context/pin", data={"context_tag": "extra"})
         # The pin box was pre-filled with "extra"; the user cleared it by
         # hand and pressed pin, expecting the tags to be gone.
-        response = client.post("/context/pin", data={"tag": ""})
+        response = client.post("/context/pin", data={"context_tag": ""})
         assert response.status_code == 200
         with Store.open(tmp_path / "hashline.db") as store:
             context = store.get_context()
@@ -826,7 +831,7 @@ class TestContext:
             )
 
         response = client.post(
-            "/context/read", data={"citekey": "smith2020", "tag": ""}
+            "/context/read", data={"context_citekey": "smith2020", "context_tag": ""}
         )
         assert response.status_code == 200
         assert "smith2020" in response.text
@@ -853,8 +858,8 @@ class TestContext:
                     )
                 ]
             )
-        client.post("/context/pin", data={"tag": "research urgent"})
-        response = client.post("/context/read", data={"citekey": "smith2020"})
+        client.post("/context/pin", data={"context_tag": "research urgent"})
+        response = client.post("/context/read", data={"context_citekey": "smith2020"})
         assert response.status_code == 200
         with Store.open(tmp_path / "hashline.db") as store:
             context = store.get_context()
@@ -880,13 +885,18 @@ class TestContext:
             )
 
         response = client.post(
-            "/context/read", data={"citekey": "smith2020", "tag": "annotating"}
+            "/context/read",data={
+                    "context_citekey": "smith2020",
+                    "context_tag": "annotating",
+                }
         )
         assert response.status_code == 200
         assert "annotating" in response.text
 
     def test_read_unknown_citekey(self, client: TestClient) -> None:
-        response = client.post("/context/read", data={"citekey": "nope", "tag": ""})
+        response = client.post(
+            "/context/read", data={"context_citekey": "nope", "context_tag": ""}
+        )
         assert response.status_code == 200
         assert "no bibliography entry for citekey" in response.text
 
@@ -906,17 +916,20 @@ class TestContext:
             )
 
         response = client.post(
-            "/context/read", data={"citekey": "smith2020", "tag": "invalid@tag"}
+            "/context/read",data={
+                    "context_citekey": "smith2020",
+                    "context_tag": "invalid@tag",
+                }
         )
         assert response.status_code == 200
         assert 'class="error"' in response.text
 
     def test_clear_context(self, client: TestClient) -> None:
-        client.post("/context/pin", data={"tag": "research"})
+        client.post("/context/pin", data={"context_tag": "research"})
         response = client.post("/context/clear")
         assert response.status_code == 200
         assert "research" not in response.text
-        assert 'name="citekey"' in response.text
+        assert 'name="context_citekey"' in response.text
 
     def test_pin_tags_form_still_offered_once_a_work_is_pinned(
         self, client: TestClient, tmp_path: Path
@@ -932,7 +945,9 @@ class TestContext:
                     )
                 ]
             )
-        client.post("/context/read", data={"citekey": "smith2020", "tag": ""})
+        client.post(
+            "/context/read", data={"context_citekey": "smith2020", "context_tag": ""}
+        )
         # Without this form the reader has no way to change tags once reading.
         response = client.get("/context")
         assert response.status_code == 200
@@ -941,7 +956,7 @@ class TestContext:
     def test_context_still_offers_the_read_form_with_only_tags_pinned(
         self, client: TestClient
     ) -> None:
-        client.post("/context/pin", data={"tag": "idea"})
+        client.post("/context/pin", data={"context_tag": "idea"})
         response = client.get("/context")
         assert response.status_code == 200
         # Pinning a tag must not hide the only way to start reading a work.
@@ -950,7 +965,7 @@ class TestContext:
     def test_index_still_offers_the_read_form_with_only_tags_pinned(
         self, client: TestClient
     ) -> None:
-        client.post("/context/pin", data={"tag": "idea"})
+        client.post("/context/pin", data={"context_tag": "idea"})
         response = client.get("/")
         assert response.status_code == 200
         assert 'hx-post="/context/read"' in response.text
@@ -969,8 +984,13 @@ class TestContext:
                     )
                 ]
             )
-        client.post("/context/read", data={"citekey": "smith2020", "tag": "reading"})
-        client.post("/context/pin", data={"tag": "extra"})
+        client.post(
+            "/context/read",data={
+                    "context_citekey": "smith2020",
+                    "context_tag": "reading",
+                }
+        )
+        client.post("/context/pin", data={"context_tag": "extra"})
         response = client.post("/context/clear_tags")
         assert response.status_code == 200
         # Assert on the stored context, not on the HTML: the strip's own copy
@@ -995,7 +1015,12 @@ class TestContext:
                     )
                 ]
             )
-        client.post("/context/read", data={"citekey": "smith2020", "tag": "reading"})
+        client.post(
+            "/context/read",data={
+                    "context_citekey": "smith2020",
+                    "context_tag": "reading",
+                }
+        )
         response = client.post("/context/clear_read")
         assert response.status_code == 200
         with Store.open(tmp_path / "hashline.db") as store:
@@ -1017,7 +1042,12 @@ class TestContext:
                     )
                 ]
             )
-        client.post("/context/read", data={"citekey": "smith2020", "tag": "reading"})
+        client.post(
+            "/context/read",data={
+                    "context_citekey": "smith2020",
+                    "context_tag": "reading",
+                }
+        )
         response = client.post("/context/clear")
         assert response.status_code == 200
         with Store.open(tmp_path / "hashline.db") as store:
