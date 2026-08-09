@@ -13,12 +13,32 @@ from pathlib import Path
 from types import TracebackType
 from typing import Final
 
-from hashline.models import Note, NoteDraft, TagCount
+from hashline.models import Note, NoteDraft, SearchHit, TagCount
 from hashline.tags import extract_tags, normalize_tag
 
 SCHEMA_VERSION: Final = 1
 
 _SCHEMA_PATH: Final = Path(__file__).with_name("schema.sql")
+
+#: The trigram tokenizer indexes three-character sequences, so it cannot match
+#: anything shorter than that.
+_MIN_TRIGRAM_QUERY: Final = 3
+
+
+def _as_phrase(text: str) -> str:
+    """Wrap user input as a single FTS5 phrase.
+
+    Quoting the whole query keeps characters like ``#``, ``-`` and ``*`` from
+    being read as FTS5 operators and turning a search into a syntax error. With
+    the trigram tokenizer a phrase query is a substring query, which is exactly
+    what a note search should mean.
+    """
+    return '"' + text.replace('"', '""') + '"'
+
+
+def _as_like_pattern(text: str) -> str:
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _utc_now() -> datetime:
@@ -243,6 +263,67 @@ class Store:
             params = (limit,)
         rows = self._conn.execute(sql, params).fetchall()
         return [TagCount(name=row["name"], count=row["count"]) for row in rows]
+
+    def search_notes(
+        self, query: str, *, tag: str | None = None, limit: int = 50
+    ) -> list[SearchHit]:
+        """Full-text search, best match first.
+
+        ``SearchHit.score`` is ``-bm25()``: SQLite returns a negative relevance
+        where smaller is better, so the sign is flipped and **higher means a
+        better match**.
+
+        The index uses the trigram tokenizer, which cannot answer queries
+        shorter than three characters. Those fall back to a substring scan and
+        come back newest-first with a score of ``0.0``.
+        """
+        text = query.strip()
+        if not text:
+            return []
+        name: str | None = None
+        if tag is not None:
+            name = _filter_tag(tag)
+            if name is None:
+                return []
+        if len(text) < _MIN_TRIGRAM_QUERY:
+            return self._search_by_substring(text, name, limit)
+        return self._search_by_rank(text, name, limit)
+
+    def _search_by_rank(
+        self, text: str, tag: str | None, limit: int
+    ) -> list[SearchHit]:
+        sql = (
+            "SELECT n.id, n.body, n.created_at, n.source, "
+            "-bm25(notes_fts) AS score "
+            "FROM notes_fts JOIN notes n ON n.id = notes_fts.rowid "
+            "WHERE notes_fts MATCH ?"
+        )
+        params: list[object] = [_as_phrase(text)]
+        if tag is not None:
+            sql += " AND n.id IN (SELECT nt.note_id FROM note_tags nt "
+            sql += "JOIN tags t ON t.id = nt.tag_id WHERE t.name = ?)"
+            params.append(tag)
+        sql += " ORDER BY score DESC, n.created_at DESC, n.id DESC LIMIT ?"
+        params.append(limit)
+        rows = self._conn.execute(sql, params).fetchall()
+        return [SearchHit(note=_to_note(row), score=row["score"]) for row in rows]
+
+    def _search_by_substring(
+        self, text: str, tag: str | None, limit: int
+    ) -> list[SearchHit]:
+        sql = (
+            "SELECT n.id, n.body, n.created_at, n.source FROM notes n "
+            "WHERE n.body LIKE ? ESCAPE '\\'"
+        )
+        params: list[object] = [_as_like_pattern(text)]
+        if tag is not None:
+            sql += " AND n.id IN (SELECT nt.note_id FROM note_tags nt "
+            sql += "JOIN tags t ON t.id = nt.tag_id WHERE t.name = ?)"
+            params.append(tag)
+        sql += " ORDER BY n.created_at DESC, n.id DESC LIMIT ?"
+        params.append(limit)
+        rows = self._conn.execute(sql, params).fetchall()
+        return [SearchHit(note=_to_note(row), score=0.0) for row in rows]
 
     def tags_for_note(self, note_id: int) -> list[str]:
         """Return the tags linked to one note, in alphabetical order."""
