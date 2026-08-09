@@ -23,6 +23,10 @@ from hashline.tags import normalize_tag
 _BODY_WIDTH: Final = 90
 _WHITESPACE_RE: Final = re.compile(r"\s+")
 
+#: Notes per encode() call. Big enough that the model is not called per note,
+#: small enough that progress appears on a large library.
+_EMBED_BATCH: Final = 32
+
 
 class Mode(StrEnum):
     """How an imported document is cut into notes."""
@@ -222,6 +226,71 @@ def search(
             note = hit.note
             body = _format_note(note, store.tags_for_note(note.id))
             typer.echo(f"{hit.score:6.2f}  {body}")
+
+
+@app.command()
+def index(
+    ctx: typer.Context,
+    model_name: Annotated[
+        str | None,
+        typer.Option("--model", help="Embedding model. Defaults to e5-small."),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", "-n", help="Stop after this many notes."),
+    ] = None,
+    rebuild: Annotated[
+        bool,
+        typer.Option("--rebuild", help="Re-embed every note, not just new ones."),
+    ] = False,
+) -> None:
+    """Embed notes so that `search --semantic` can reach them.
+
+    Needs the optional `ml` extra. Everything else works without it.
+    """
+    # Imported here, not at module level: numpy alone more than doubles the
+    # startup of `hashline add`, and nothing but this command and a semantic
+    # search needs it.
+    from hashline.ml import embed
+    from hashline.ml.search import normalize_rows
+
+    name = model_name if model_name is not None else embed.DEFAULT_MODEL
+    key = embed.embedding_key(name)
+
+    with _open(ctx) as store:
+        if rebuild:
+            pending = store.list_notes(limit=limit if limit is not None else -1)
+        else:
+            pending = store.notes_without_embedding(key, limit=limit)
+        if not pending:
+            typer.echo(f"nothing to index for {key}")
+            return
+
+        try:
+            model = embed.load_model(name)
+        except embed.MlExtraNotInstalled as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1) from exc
+
+        done = 0
+        for start in range(0, len(pending), _EMBED_BATCH):
+            batch = pending[start : start + _EMBED_BATCH]
+            # Stored normalized, so a search is one matrix product and the
+            # ranker's own normalization becomes a no-op.
+            vectors = normalize_rows(
+                embed.embed_texts([note.body for note in batch], model=model)
+            )
+            for note, vector in zip(batch, vectors, strict=True):
+                store.upsert_embedding(
+                    note.id,
+                    model=key,
+                    vector=embed.pack_vector(vector),
+                    dim=int(vector.shape[0]),
+                )
+            done += len(batch)
+            typer.echo(f"  {done}/{len(pending)}", err=True)
+
+    typer.echo(f"indexed {done} notes with {key}")
 
 
 @app.command()

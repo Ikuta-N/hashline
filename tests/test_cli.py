@@ -2,10 +2,13 @@
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 from typer.testing import CliRunner
 
 from hashline.cli import app
+from hashline.ml import embed
+from hashline.store import Store
 
 runner = CliRunner()
 
@@ -518,3 +521,99 @@ class TestExport:
         query = "SELECT id, body, parent_id FROM notes ORDER BY id"
         rows = conn.execute(query).fetchall()
         assert rows[3] == (4, "child B", 3)
+
+
+class FakeEmbedder:
+    """Encodes a text as a bag of characters, deterministically.
+
+    Enough for the wiring: identical texts get identical vectors, and a
+    query sharing characters with a note scores above one that does not.
+    No model is downloaded, so these tests run in CI.
+    """
+
+    dim = 8
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        rows = np.zeros((len(texts), self.dim), dtype=np.float32)
+        for row, text in enumerate(texts):
+            for character in text:
+                rows[row][ord(character) % self.dim] += 1.0
+        return rows
+
+
+@pytest.fixture
+def fake_model(monkeypatch: pytest.MonkeyPatch) -> FakeEmbedder:
+    embedder = FakeEmbedder()
+    monkeypatch.setattr("hashline.ml.embed.load_model", lambda name=None: embedder)
+    return embedder
+
+
+class TestIndex:
+    def test_embeds_every_note_and_reports_the_count(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        run(db, "add", "one")
+        run(db, "add", "two")
+        assert "indexed 2 notes" in run(db, "index")
+
+    def test_a_second_run_has_nothing_to_do(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        run(db, "add", "one")
+        run(db, "index")
+        assert "nothing to index" in run(db, "index")
+
+    def test_rebuild_re_embeds_what_is_already_there(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        run(db, "add", "one")
+        run(db, "index")
+        assert "indexed 1 notes" in run(db, "index", "--rebuild")
+
+    def test_honours_limit(self, db: Path, fake_model: FakeEmbedder) -> None:
+        for body in ("one", "two", "three"):
+            run(db, "add", body)
+        assert "indexed 2 notes" in run(db, "index", "--limit", "2")
+        assert "indexed 1 notes" in run(db, "index")
+
+    def test_stores_unit_length_vectors_under_the_prefixed_key(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        """Normalized on write, so a search is one matrix product.
+
+        The key carries the prefix convention, not just the model name --
+        vectors made under a different convention must never be read as if
+        they were these.
+        """
+        run(db, "add", "one")
+        run(db, "index")
+        with Store.open(db) as store:
+            rows = list(store.iter_embeddings(embed.EMBEDDING_KEY))
+        assert len(rows) == 1
+        vector = embed.unpack_vector(rows[0][1], expected_dim=FakeEmbedder.dim)
+        assert np.isclose(float(np.linalg.norm(vector)), 1.0)
+
+    def test_another_key_does_not_see_these_vectors(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        run(db, "add", "one")
+        run(db, "index", "--model", "some/other-model")
+        with Store.open(db) as store:
+            assert list(store.iter_embeddings(embed.EMBEDDING_KEY)) == []
+            assert len(list(store.iter_embeddings("some/other-model+query"))) == 1
+
+    def test_without_the_extra_it_says_how_to_get_it(
+        self, db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def refuse(name: str = "") -> object:
+            raise embed.MlExtraNotInstalled("needs the 'ml' extra: uv sync --extra ml")
+
+        monkeypatch.setattr("hashline.ml.embed.load_model", refuse)
+        run(db, "add", "one")
+        result = runner.invoke(app, ["--db", str(db), "index"])
+        assert result.exit_code == 1
+        assert "--extra ml" in result.output
+
+    def test_an_empty_database_needs_no_model(self, db: Path) -> None:
+        # No fake_model fixture: nothing should try to load one.
+        assert "nothing to index" in run(db, "index")

@@ -28,13 +28,19 @@ DEFAULT_MODEL: Final = "intfloat/multilingual-e5-small"
 #: also means one function embeds both a note and a search for it.
 QUERY_PREFIX: Final = "query: "
 
-#: What goes in the embeddings.model column.
-#:
-#: Not just the model name: e5 returns different vectors for the same text
-#: under a different prefix, so the prefix is part of what produced the
-#: vector. Changing either changes this key, old rows keep their own, and the
-#: two never mix. A dimension check could not do this job -- e5-small and the
-#: MiniLM model it replaced are both 384-wide.
+def embedding_key(model_name: str = DEFAULT_MODEL) -> str:
+    """What goes in the ``embeddings.model`` column for ``model_name``.
+
+    Not just the model name: e5 returns different vectors for the same text
+    under a different prefix, so the prefix is part of what produced the
+    vector. Change either and this key changes, old rows keep their own, and
+    the two never mix. A dimension check could not do this job -- e5-small
+    and the MiniLM model it replaced are both 384-wide.
+    """
+    return f"{model_name}+{QUERY_PREFIX.strip().rstrip(':')}"
+
+
+#: The key for the default model, for callers that do not choose one.
 EMBEDDING_KEY: Final = f"{DEFAULT_MODEL}+query"
 
 #: In-memory element type. float32 is what sentence-transformers emits, and
