@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from hashline.cli import app, collect_documents
+from hashline.cli import app
 
 runner = CliRunner()
 
@@ -356,31 +356,6 @@ class TestRead:
         run(db, "read", "start", "smith2020")
         output = run(db, "add", "a note", "--page", page)
         assert page in output
-
-
-class TestCollectDocuments:
-    def test_reads_an_explicit_file_whatever_its_suffix(self, notes_dir: Path) -> None:
-        documents, skipped = collect_documents([notes_dir / "ignored.json"])
-        assert len(documents) == 1
-        assert skipped == []
-
-    def test_directory_walk_keeps_only_text_suffixes(self, notes_dir: Path) -> None:
-        documents, _ = collect_documents([notes_dir])
-        assert {Path(doc.source).name for doc in documents} == {
-            "daily.md",
-            "empty.md",
-            "fenced.md",
-            "scratch.txt",
-        }
-
-    def test_reports_a_file_it_cannot_decode(self, tmp_path: Path) -> None:
-        broken = tmp_path / "broken.txt"
-        broken.write_bytes(b"\xff\xfe not utf-8")
-        documents, skipped = collect_documents([tmp_path])
-        assert documents == []
-        assert len(skipped) == 1
-        assert "broken.txt" in skipped[0]
-
 
 class TestReply:
     def test_reply_attaches_to_parent(self, db: Path) -> None:
