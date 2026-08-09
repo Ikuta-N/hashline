@@ -196,6 +196,13 @@ def create_note(
             ),
             "q": q,
             "tag": tag,
+            # _timeline.html reads these too. Only the delete route sets
+            # delete_retry_id today, so leaving them out here renders the
+            # same as passing them -- until the next thing added to that
+            # error block silently comes back with blank filters.
+            "citekey": citekey,
+            "roots_only": roots_only,
+            "limit": limit,
             "error": error,
         },
     )
