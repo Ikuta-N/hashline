@@ -2270,18 +2270,24 @@ class TestSemanticSearch:
     def test_it_ranks_by_the_stored_vectors(
         self, seeded: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Note 2 is the nearest vector, so it must outrank note 1.
+        """A note the keyword index cannot reach still comes back.
 
-        Keyword search alone puts note 1 first (it is the only one containing
-        the query), so the order here can only come from the fusion.
+        "無関係なメモ" contains no part of the query, so plain search never
+        returns it. Its vector is the query's nearest, so the semantic ranking
+        does -- which is the whole reason the toggle exists. The keyword hit
+        still leads, because it is the one note both rankers agree on.
         """
         monkeypatch.setattr("hashline.ml.embed.is_available", lambda: True)
         monkeypatch.setattr(
             "hashline.ml.embed.load_model", lambda name=None: _FakeEmbedder([0.0, 1.0])
         )
         self._embed(tmp_path, {1: [1.0, 0.0], 2: [0.0, 1.0]})
+        plain = seeded.get("/notes", params={"q": "bm25"}).text
+        assert "無関係なメモ" not in plain
+
         body = seeded.get("/notes", params={"q": "bm25", "semantic": "true"}).text
-        assert body.index("無関係なメモ") < body.index("bm25 を調べた")
+        assert "無関係なメモ" in body
+        assert body.index("bm25 を調べた") < body.index("無関係なメモ")
 
     def test_a_half_indexed_library_says_how_much_is_left(
         self, seeded: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

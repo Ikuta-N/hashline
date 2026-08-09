@@ -1,7 +1,7 @@
 <section id="timeline">
   {% if thread_root %}
     <p class="thread-header">
-      <button hx-get="/notes" hx-target="#timeline" hx-swap="outerHTML" hx-include="[name='q'], [name='tag'], [name='citekey'], [name='roots_only'], [name='limit']">&larr; all notes</button>
+      <button hx-get="/notes" hx-target="#timeline" hx-swap="outerHTML" hx-include="[name='q'], [name='tag'], [name='citekey'], [name='roots_only'], [name='limit'], [name='semantic']">&larr; all notes</button>
       &middot; <a href="/export?root={{ thread_root }}">export this thread</a>
     </p>
   {% endif %}
@@ -19,6 +19,7 @@
           <input type="hidden" name="citekey" value="{{ citekey }}">
           {# Omitted rather than sent empty: an empty string is not a bool. #}
           {% if roots_only %}<input type="hidden" name="roots_only" value="true">{% endif %}
+          {% if semantic %}<input type="hidden" name="semantic" value="true">{% endif %}
           <input type="hidden" name="limit" value="{{ limit }}">
           <button type="submit">delete the whole thread</button>
         </form>

@@ -6,8 +6,12 @@ result. A fresh connection is opened per request, because a sqlite3 connection
 must not be shared across the threads FastAPI runs sync handlers on.
 """
 
+import logging
+import os
 import re
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+import threading
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Final
 from urllib.parse import urlsplit
@@ -38,7 +42,55 @@ _HERE: Final = Path(__file__).parent
 
 templates = Jinja2Templates(directory=str(_HERE / "templates"))
 
-app = FastAPI(title="hashline")
+_log: Final = logging.getLogger("hashline.web")
+
+#: Set to skip the startup indexing pass. For the test suite, and for anyone
+#: who wants the server up before a large library finishes embedding.
+_NO_INDEX_ENV: Final = "HASHLINE_NO_INDEX"
+
+
+def _index_in_background() -> None:
+    """Embed whatever is unembedded, in a thread, at startup.
+
+    Semantic search needs vectors, and asking the user to remember a CLI
+    command is how a feature goes unused. A button would be worse: the first
+    run downloads a model, so it would hold a request open for minutes.
+
+    Three gates, any of which ends this without the model being touched: the
+    extra is not installed, nothing is unembedded, or the environment says not
+    to. Nothing here may raise -- an indexing failure must not stop the app
+    from serving notes, which is the part that works without any of this.
+    """
+    if os.environ.get(_NO_INDEX_ENV):
+        return
+    try:
+        from hashline.ml import hybrid
+
+        if not hybrid.is_available():
+            return
+        # A fresh connection: sqlite3 objects belong to the thread that made
+        # them, and this one outlives the request that started it.
+        with Store.open(default_db_path()) as store:
+            if not hybrid.pending_count(store):
+                return
+            _log.info("indexing notes in the background")
+            done = hybrid.index_pending(store)
+            _log.info("indexed %d notes", done)
+    except Exception:  # noqa: BLE001 - a failed index must not take the app down
+        _log.exception("background indexing failed; semantic search may be stale")
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Start the indexer without making anyone wait for it."""
+    worker = threading.Thread(
+        target=_index_in_background, name="hashline-index", daemon=True
+    )
+    worker.start()
+    yield
+
+
+app = FastAPI(title="hashline", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
 
 _SAFE_METHODS: Final = {"GET", "HEAD", "OPTIONS"}
@@ -93,10 +145,17 @@ def index(
     citekey: str = "",
     roots_only: bool = False,
     limit: int = 50,
+    semantic: bool = False,
 ) -> HTMLResponse:
     # tags_for_note needs the db, do it before rendering
-    notes = _timeline(
-        store, q=q, tag=tag, citekey=citekey, roots_only=roots_only, limit=limit
+    notes, notice = _timeline(
+        store,
+        q=q,
+        tag=tag,
+        citekey=citekey,
+        roots_only=roots_only,
+        limit=limit,
+        semantic=semantic,
     )
 
     context_data = {
@@ -107,6 +166,8 @@ def index(
         "citekey": citekey,
         "roots_only": roots_only,
         "limit": limit,
+        "semantic": semantic,
+        "notice": notice,
         "total": store.count_notes(),
     }
 
@@ -128,9 +189,16 @@ def notes_fragment(
     citekey: str = "",
     roots_only: bool = False,
     limit: int = 50,
+    semantic: bool = False,
 ) -> HTMLResponse:
-    notes = _timeline(
-        store, q=q, tag=tag, citekey=citekey, roots_only=roots_only, limit=limit
+    notes, notice = _timeline(
+        store,
+        q=q,
+        tag=tag,
+        citekey=citekey,
+        roots_only=roots_only,
+        limit=limit,
+        semantic=semantic,
     )
 
     return templates.TemplateResponse(
@@ -143,6 +211,8 @@ def notes_fragment(
             "citekey": citekey,
             "roots_only": roots_only,
             "limit": limit,
+            "semantic": semantic,
+            "notice": notice,
         },
     )
 
@@ -159,6 +229,7 @@ def create_note(
     citekey: Annotated[str, Form()] = "",
     roots_only: Annotated[bool, Form()] = False,
     limit: Annotated[int, Form()] = 50,
+    semantic: Annotated[bool, Form()] = False,
     no_context: Annotated[bool, Form()] = False,
     parent_id: Annotated[int | None, Form()] = None,
 ) -> HTMLResponse:
@@ -195,13 +266,22 @@ def create_note(
                 )
         except ValueError as exc:
             error = str(exc)
+    notes, notice = _timeline(
+        store,
+        q=q,
+        tag=tag,
+        citekey=citekey,
+        roots_only=roots_only,
+        limit=limit,
+        semantic=semantic,
+    )
     return templates.TemplateResponse(
         request=request,
         name="_timeline.html",
         context={
-            "notes": _timeline(
-                store, q=q, tag=tag, citekey=citekey, roots_only=roots_only, limit=limit
-            ),
+            "notes": notes,
+            "notice": notice,
+            "semantic": semantic,
             "q": q,
             "tag": tag,
             # _timeline.html reads these too. Only the delete route sets
@@ -226,6 +306,7 @@ def reply_fragment(
     citekey: str = "",
     roots_only: bool = False,
     limit: int = 50,
+    semantic: bool = False,
 ) -> HTMLResponse:
     """The reply form fragment."""
     return templates.TemplateResponse(
@@ -239,6 +320,7 @@ def reply_fragment(
             "citekey": citekey,
             "roots_only": roots_only,
             "limit": limit,
+            "semantic": semantic,
         },
     )
 
@@ -253,6 +335,7 @@ def thread(
     citekey: str = "",
     roots_only: bool = False,
     limit: int = 50,
+    semantic: bool = False,
 ) -> HTMLResponse:
     """The subtree rooted at note_id, still carrying the caller's filters.
 
@@ -289,6 +372,7 @@ def thread(
             "citekey": citekey,
             "roots_only": roots_only,
             "limit": limit,
+            "semantic": semantic,
             "thread_root": note_id,
             "error": error,
         },
@@ -306,6 +390,7 @@ def delete_note(
     citekey: Annotated[str, Form()] = "",
     roots_only: Annotated[bool, Form()] = False,
     limit: Annotated[int, Form()] = 50,
+    semantic: Annotated[bool, Form()] = False,
 ) -> HTMLResponse:
     error: str | None = None
     notice: str | None = None
@@ -326,13 +411,24 @@ def delete_note(
         )
         delete_retry_id = note_id
 
+    notes, timeline_notice = _timeline(
+        store,
+        q=q,
+        tag=tag,
+        citekey=citekey,
+        roots_only=roots_only,
+        limit=limit,
+        semantic=semantic,
+    )
+    # What just happened beats a standing note about the index.
+    notice = notice or timeline_notice
+
     return templates.TemplateResponse(
         request=request,
         name="_timeline.html",
         context={
-            "notes": _timeline(
-                store, q=q, tag=tag, citekey=citekey, roots_only=roots_only, limit=limit
-            ),
+            "notes": notes,
+            "semantic": semantic,
             "q": q,
             "tag": tag,
             # The retry form re-submits these, so they have to survive the
@@ -356,14 +452,23 @@ def _timeline(
     citekey: str = "",
     roots_only: bool = False,
     limit: int = 50,
-) -> list[tuple[Note, list[str], int]]:
-    """Notes plus their tags, either searched (flat) or listed (nested)."""
+    semantic: bool = False,
+) -> tuple[list[tuple[Note, list[str], int]], str | None]:
+    """Notes plus their tags, and anything the user needs told.
+
+    Returns the rows and an optional notice. Semantic search can succeed and
+    still be worth talking about -- a library that is half embedded gives a
+    shorter answer than it should, and saying nothing would leave the user to
+    guess why.
+    """
     filter_tag = tag or None
     filter_citekey = citekey or None
+    if semantic and q.strip():
+        return _semantic_timeline(store, q, tag=filter_tag, limit=limit)
     if q.strip():
         # Ranked list and tree are different things -- render search results FLAT.
         found = [hit.note for hit in store.search_notes(q, tag=filter_tag, limit=limit)]
-        return [(note, store.tags_for_note(note.id), 0) for note in found]
+        return [(note, store.tags_for_note(note.id), 0) for note in found], None
 
     found = store.list_notes(
         tag=filter_tag, citekey=filter_citekey, roots_only=roots_only, limit=limit
@@ -376,7 +481,43 @@ def _timeline(
             yield root.note, store.tags_for_note(root.note.id), depth
             yield from flatten(root.children, depth + 1)
 
-    return list(flatten(list(reversed(build_tree(found)))))
+    return list(flatten(list(reversed(build_tree(found))))), None
+
+
+def _semantic_timeline(
+    store: Store, q: str, *, tag: str | None, limit: int
+) -> tuple[list[tuple[Note, list[str], int]], str | None]:
+    """Rank by meaning blended with keyword, flat like any other search.
+
+    Every way this can fail to answer says why. An empty list with no
+    explanation would read as "no such note", when the truth is usually that
+    the model is still working or was never installed.
+    """
+    from hashline.ml import hybrid
+    from hashline.ml.embed import MlExtraNotInstalled
+
+    try:
+        result = hybrid.hybrid_search(store, q, tag=tag, limit=limit)
+    except MlExtraNotInstalled:
+        return [], (
+            "semantic search needs the optional 'ml' extra: "
+            "stop the server, run `uv sync --extra ml`, and start it again"
+        )
+    except hybrid.NotIndexed:
+        return [], (
+            "no notes are embedded yet. Indexing starts in the background when "
+            "the server starts -- give it a moment and search again"
+        )
+
+    rows = []
+    for note_id, _score in result.hits:
+        note = store.get_note(note_id)
+        if note is not None:  # deleted between the two reads
+            rows.append((note, store.tags_for_note(note.id), 0))
+    notice = None
+    if result.pending:
+        notice = f"{result.pending} notes are still being indexed"
+    return rows, notice
 
 
 def _context_data(store: Store, error: str | None = None) -> dict[str, Any]:
