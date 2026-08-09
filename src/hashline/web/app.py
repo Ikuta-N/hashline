@@ -182,6 +182,9 @@ def reply_fragment(
     note_id: int,
     tag: str = "",
     q: str = "",
+    citekey: str = "",
+    roots_only: bool = False,
+    limit: int = 50,
 ) -> HTMLResponse:
     """The reply form fragment."""
     return templates.TemplateResponse(
@@ -192,6 +195,9 @@ def reply_fragment(
             "pinned_citekey": store.get_context().citekey,
             "tag": tag,
             "q": q,
+            "citekey": citekey,
+            "roots_only": roots_only,
+            "limit": limit,
         },
     )
 
