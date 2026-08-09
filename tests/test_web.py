@@ -3,6 +3,7 @@
 import re
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Final
 
 import pytest
 from fastapi.testclient import TestClient
@@ -199,6 +200,28 @@ class TestTimelineFragment:
 
 
 class TestFilters:
+    @pytest.mark.parametrize("label", ["all", "#sqlite"])
+    def test_the_tag_links_keep_a_widened_limit(
+        self, seeded: TestClient, label: str
+    ) -> None:
+        """``limit`` is a filter, so the plain links must carry it too.
+
+        Every htmx path on this page carries ``limit`` because widening it
+        and then typing, replying or deleting used to snap the timeline
+        back to 50. The tag chips are ordinary ``<a href>`` links and were
+        left behind, so one click undoes the widening with nothing on
+        screen to say the list just got shorter.
+        """
+        page = seeded.get("/", params={"limit": "200"})
+        assert page.status_code == 200
+        pattern = r'<a href="(/\?[^"]*)"[^>]*>\s*' + re.escape(label)
+        links = re.findall(pattern, page.text)
+        assert links, f"no {label!r} link found on the page"
+        for href in links:
+            assert "limit=200" in href, (
+                f"the {label!r} link is {href!r}, which drops the widened limit"
+            )
+
     def test_filter_by_citekey(self, client: TestClient, tmp_path: Path) -> None:
         with Store.open(tmp_path / "hashline.db") as store:
             store.upsert_bib_entries(
@@ -1055,6 +1078,41 @@ class TestContext:
         assert context.citekey is None
         assert context.tags == ()
 
+    def test_read_start_with_a_hash_prefixed_tag_does_not_duplicate_it(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        """``#reading`` and ``reading`` are the same pinned tag.
+
+        The read form sits in a strip about ``#tags``, so typing the ``#``
+        is the natural gesture. The merge that keeps pinned tags when a
+        read starts compares the raw input against tags the store has
+        already normalized, so the hash-prefixed spelling misses the check
+        and is appended a second time. It compounds: the pin box is
+        re-rendered from those tags, so re-pinning keeps the duplicate.
+        """
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="Test",
+                        tag="smith2020",
+                    )
+                ]
+            )
+        client.post(
+            "/context/read",
+            data={"context_citekey": "smith2020", "context_tag": "reading"},
+        )
+        client.post("/context/clear_read")
+        client.post(
+            "/context/read",
+            data={"context_citekey": "smith2020", "context_tag": "#reading"},
+        )
+        with Store.open(tmp_path / "hashline.db") as store:
+            assert store.get_context().tags == ("reading",)
+
 
 class TestBib:
     def test_bib_list_empty(self, client: TestClient) -> None:
@@ -1202,6 +1260,27 @@ class TestImport:
         assert "imported 1 notes" not in response.text
         with Store.open(tmp_path / "hashline.db") as store:
             assert store.count_notes() == 0
+
+    def test_a_rejected_mode_still_reports_the_files_it_skipped(
+        self, client: TestClient
+    ) -> None:
+        """A refusal must not swallow the per-file report already collected.
+
+        The early return for a bad mode carries only ``error``, so the
+        "skipped" list gathered from the other files in the same submission
+        never reaches the page: the user is told the mode was wrong and
+        silently loses the news that one of their files was unreadable.
+        """
+        files = [
+            ("files", ("good.txt", b"a note\n")),
+            ("files", ("bad.txt", b"\xff\xfe not utf-8")),
+        ]
+        response = client.post("/import", data={"mode": "invalid"}, files=files)
+        assert response.status_code == 200
+        assert 'class="error"' in response.text
+        assert "bad.txt" in response.text, (
+            "the mode error hid the file that could not be read"
+        )
 
     def test_import_bib_upload(self, client: TestClient) -> None:
         files = {"file": ("library.bib", b"@article{smith2020, title={A title}}")}
@@ -1672,3 +1751,123 @@ class TestCsrf:
         assert response.status_code == 200
         with Store.open(tmp_path / "hashline.db") as store:
             assert store.count_notes() == 0
+
+    def test_a_proxied_https_origin_is_accepted(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        """Behind a TLS-terminating proxy the scheme cannot be compared.
+
+        ngrok, a Tailscale funnel or any reverse proxy leaves the ASGI
+        scope on ``http`` while the browser sends ``Origin: https://...``.
+        Comparing the scheme rejects every write and the whole UI stops
+        working; comparing the host is the check that actually stops a
+        cross-origin post, because the browser -- not the attacker -- picks
+        the host it connects to.
+        """
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("to delete")
+        response = client.post(
+            "/notes/1/delete", headers={"Origin": "https://testserver"}
+        )
+        assert response.status_code == 200, (
+            "a same-host request through a TLS-terminating proxy was rejected"
+        )
+        with Store.open(tmp_path / "hashline.db") as store:
+            assert store.count_notes() == 0
+
+
+class TestFormContracts:
+    """Every rendered form must post the field names its route requires.
+
+    ``TestHtmxTargets`` proves a control's request leaves the browser; this
+    proves the server accepts it. Renaming a Form parameter without
+    renaming it in every template that posts to that route answers 422, and
+    htmx does not swap a non-2xx response -- so the button is as dead as a
+    missing hx-target, with nothing on screen to say so. Asserting the
+    markup contains ``hx-post="/context/read"`` cannot catch that; only
+    submitting the fields the page actually renders can.
+    """
+
+    #: Fields a browser leaves out of a submission, so neither can we: an
+    #: unticked checkbox is not sent at all, and an empty file input is not
+    #: a string the route could parse.
+    _OMITTED_TYPES: Final = {"checkbox", "file"}
+
+    @staticmethod
+    def _seed(tmp_path: Path) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="Test",
+                        tag="smith2020",
+                    )
+                ]
+            )
+            store.add_note("a note #tag")
+
+    @staticmethod
+    def _forms(html: str) -> list[tuple[str, str, dict[str, str]]]:
+        """Every form on the page as ``(method, action, fields)``.
+
+        Covers the htmx forms and the two plain ones alike -- ``/import``
+        submits multipart the normal way, and ``/export`` previews with
+        ``hx-get`` -- because the mismatch this guards against is about
+        field names, not about how the request is sent.
+        """
+        forms = []
+        for block in re.findall(r"<form\b.*?</form>", html, re.DOTALL):
+            submission = TestFormContracts._submission(block)
+            if submission is None:
+                continue
+            fields: dict[str, str] = {}
+            for control in re.findall(r"<(?:input|textarea|select)\b[^>]*>", block):
+                name = re.search(r'name="([^"]+)"', control)
+                if name is None:
+                    continue
+                kind = re.search(r'type="([^"]+)"', control)
+                omitted = TestFormContracts._OMITTED_TYPES
+                if kind is not None and kind.group(1) in omitted:
+                    continue
+                value = re.search(r'value="([^"]*)"', control)
+                fields[name.group(1)] = value.group(1) if value else "x"
+            forms.append((*submission, fields))
+        return forms
+
+    @staticmethod
+    def _submission(block: str) -> tuple[str, str] | None:
+        """The ``(method, action)`` a form sends, htmx attributes first."""
+        for attribute, method in (("hx-post", "POST"), ("hx-get", "GET")):
+            target = re.search(rf'{attribute}="([^"]+)"', block)
+            if target is not None:
+                return method, target.group(1)
+        target = re.search(r'action="([^"]+)"', block)
+        if target is None:
+            return None
+        declared = re.search(r'method="([^"]+)"', block)
+        return (declared.group(1).upper() if declared else "GET"), target.group(1)
+
+    @pytest.mark.parametrize(
+        "route",
+        ["/", "/bib", "/bib/smith2020", "/import", "/export"],
+    )
+    def test_every_form_submits_the_fields_its_route_requires(
+        self, client: TestClient, tmp_path: Path, route: str
+    ) -> None:
+        self._seed(tmp_path)
+        page = client.get(route)
+        assert page.status_code == 200
+        forms = self._forms(page.text)
+        assert forms, f"no form found on {route!r}"
+        for method, action, fields in forms:
+            if method == "GET":
+                response = client.get(action, params=fields)
+            else:
+                response = client.post(action, data=fields)
+            assert response.status_code != 422, (
+                f"the form on {route!r} submitting to {action!r} sends "
+                f"{sorted(fields)}, which that route rejects as invalid: "
+                f"{response.text[:200]}"
+            )
