@@ -1138,9 +1138,34 @@ class TestBib:
             )
         response = client.get("/bib")
         assert response.status_code == 200
-        assert "smith2020" in response.text
+        # The list identifies an entry by what a person recognises it by --
+        # title, author, year -- not by its citekey, which is a lookup key.
+        # The citekey survives only as the destination of the title link.
         assert "A title" in response.text
         assert "Smith" in response.text
+        assert "2020" in response.text
+        assert '<th style="padding: 0.5rem;">Citekey</th>' not in response.text
+        assert 'href="/bib/smith2020">A title</a>' in response.text
+
+    def test_bib_list_entry_with_no_title_is_still_clickable(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        # The link moved onto the title text. A malformed BibTeX record
+        # with no title must fall back to '(no title)' as the link text,
+        # not disappear -- otherwise it becomes unreachable from the UI.
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="notitle2020",
+                        entry_type="misc",
+                        tag="notitle2020",
+                    )
+                ]
+            )
+        response = client.get("/bib")
+        assert response.status_code == 200
+        assert 'href="/bib/notitle2020">(no title)</a>' in response.text
 
     def test_bib_detail_found(self, client: TestClient, tmp_path: Path) -> None:
         with Store.open(tmp_path / "hashline.db") as store:
