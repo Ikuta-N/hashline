@@ -118,6 +118,53 @@ class TestCreateNote:
         assert response.status_code == 200
         assert 'class="error"' not in response.text
 
+    def test_page_with_no_citekey_is_error(self, client: TestClient) -> None:
+        response = client.post("/notes", data={"body": "a note", "page": "10"})
+        assert response.status_code == 200
+        assert "requires a pinned citekey" in response.text
+
+    def test_no_context_ignores_pinned_context(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        from hashline.models import Context
+
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.set_context(Context(tags=("reading",)))
+
+        response = client.post("/notes", data={"body": "a note", "no_context": "on"})
+        assert response.status_code == 200
+        # The note should not have the reading tag
+        assert "reading" not in response.text
+
+    def test_no_context_with_page_is_error(self, client: TestClient) -> None:
+        response = client.post(
+            "/notes", data={"body": "a note", "page": "10", "no_context": "on"}
+        )
+        assert response.status_code == 200
+        assert "--no-context has none" in response.text
+
+    def test_extra_tags(self, client: TestClient) -> None:
+        response = client.post("/notes", data={"body": "a note", "tags": "web ui"})
+        assert response.status_code == 200
+        assert "ui, web" in response.text
+
+
+class TestReply:
+    def test_renders_reply_fragment(self, seeded: TestClient) -> None:
+        response = seeded.get("/notes/1/reply")
+        assert response.status_code == 200
+        assert 'name="parent_id" value="1"' in response.text
+
+    def test_creates_a_reply(self, seeded: TestClient) -> None:
+        response = seeded.post("/notes", data={"body": "a reply", "parent_id": "1"})
+        assert response.status_code == 200
+        assert "a reply" in response.text
+
+    def test_unknown_parent_is_error(self, seeded: TestClient) -> None:
+        response = seeded.post("/notes", data={"body": "a reply", "parent_id": "999"})
+        assert response.status_code == 200
+        assert "does not exist" in response.text
+
 
 class TestStatic:
     def test_htmx_is_served_locally(self, client: TestClient) -> None:

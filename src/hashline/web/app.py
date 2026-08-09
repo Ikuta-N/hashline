@@ -79,6 +79,10 @@ def create_note(
     store: StoreDep,
     body: Annotated[str, Form()],
     tag: Annotated[str, Form()] = "",
+    tags: Annotated[str, Form()] = "",
+    page: Annotated[str, Form()] = "",
+    no_context: Annotated[bool, Form()] = False,
+    parent_id: Annotated[int | None, Form()] = None,
 ) -> HTMLResponse:
     """Capture a note, then hand back the refreshed timeline.
 
@@ -92,7 +96,21 @@ def create_note(
         # else the store refuses -- a pinned work that has left the library, say
         # -- is the user's to see.
         try:
-            store.add_note_with_context(body)
+            extra_tags = tuple(tags.split()) if tags.strip() else ()
+            if no_context:
+                if page:
+                    raise ValueError(
+                        "--page requires a pinned citekey; --no-context has none"
+                    )
+                store.add_note(body, extra_tags=extra_tags, parent_id=parent_id)
+            else:
+                if page and store.get_context().citekey is None:
+                    raise ValueError(
+                        "--page requires a pinned citekey; see `hashline read start`"
+                    )
+                store.add_note_with_context(
+                    body, page=page or None, extra_tags=extra_tags, parent_id=parent_id
+                )
         except ValueError as exc:
             error = str(exc)
     return templates.TemplateResponse(
@@ -104,6 +122,20 @@ def create_note(
             "tag": tag,
             "error": error,
         },
+    )
+
+
+@app.get("/notes/{note_id}/reply", response_class=HTMLResponse)
+def reply_fragment(
+    request: Request,
+    store: StoreDep,
+    note_id: int,
+) -> HTMLResponse:
+    """The reply form fragment."""
+    return templates.TemplateResponse(
+        request=request,
+        name="_reply.html",
+        context={"note_id": note_id, "pinned_citekey": store.get_context().citekey},
     )
 
 

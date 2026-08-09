@@ -8,6 +8,11 @@
         hx-swap="outerHTML"
         hx-on::after-request="this.reset()">
     <input type="text" name="body" placeholder="一行で。#タグ もそのまま書く" autofocus>
+    <input type="text" name="tags" placeholder="tags">
+    {% if pinned_citekey %}
+      <input type="text" name="page" placeholder="page">
+    {% endif %}
+    <label><input type="checkbox" name="no_context"> no_context</label>
     <input type="hidden" name="tag" value="{{ tag }}">
     <button type="submit">add</button>
   </form>
