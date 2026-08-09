@@ -206,7 +206,7 @@ class TestAgainstFixtures:
         text = plan_path.read_text(encoding="utf-8")
         doc = Document(source="plan.md", text=text)
         drafts = parse_document(doc, mode="outline")
-        
+
         db_path = tmp_path / "test.db"
         store = Store.open(db_path)
         store.init_schema()

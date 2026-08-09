@@ -95,9 +95,7 @@ def _timeline(
     """Notes plus their tags, either searched or listed."""
     filter_tag = tag or None
     if q.strip():
-        found = [
-            hit.note for hit in store.search_notes(q, tag=filter_tag, limit=limit)
-        ]
+        found = [hit.note for hit in store.search_notes(q, tag=filter_tag, limit=limit)]
     else:
         found = store.list_notes(tag=filter_tag, limit=limit)
     return [(note, store.tags_for_note(note.id)) for note in found]

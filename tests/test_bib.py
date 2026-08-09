@@ -70,17 +70,13 @@ class TestParseBibtex:
         bad = next(e for e in entries if e.citekey == "Bad:Key!Here")
         assert bad.tag == "bad-key-here"
 
-    def test_malformed_entry_is_reported_and_skipped(
-        self, library_text: str
-    ) -> None:
+    def test_malformed_entry_is_reported_and_skipped(self, library_text: str) -> None:
         entries, problems = parse_bibtex(library_text)
         citekeys = {e.citekey for e in entries}
         assert "malformed_entry" not in citekeys
         assert len(problems) >= 1
 
-    def test_neighbours_survive_a_malformed_entry(
-        self, library_text: str
-    ) -> None:
+    def test_neighbours_survive_a_malformed_entry(self, library_text: str) -> None:
         entries, _ = parse_bibtex(library_text)
         # At least 7 well-formed entries should parse
         assert len(entries) >= 7
@@ -96,7 +92,7 @@ class TestParseBibtex:
         assert problems == []
 
     def test_entry_type_is_lowercased(self) -> None:
-        text = '@Article{Test2024, title = {Test}, year = {2024}}'
+        text = "@Article{Test2024, title = {Test}, year = {2024}}"
         entries, _ = parse_bibtex(text)
         assert entries[0].entry_type == "article"
 
@@ -119,9 +115,7 @@ class TestParseBibtex:
     def test_a_field_with_no_name_stops_that_entrys_field_parsing(self) -> None:
         """A leading ``=`` before any field name reads as an empty name,
         which halts parsing of the remaining fields in that entry."""
-        entries, _ = parse_bibtex(
-            "@article{key8, = {x}, title = {After Bad Field}}"
-        )
+        entries, _ = parse_bibtex("@article{key8, = {x}, title = {After Bad Field}}")
         assert entries[0].title is None
 
     def test_a_bare_token_with_no_assignment_stops_field_parsing(self) -> None:

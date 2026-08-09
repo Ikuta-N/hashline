@@ -62,6 +62,7 @@ class NoteHasReplies(Exception):
         self.note_id = note_id
         self.reply_count = reply_count
 
+
 _SCHEMA_PATH: Final = Path(__file__).with_name("schema.sql")
 
 _DB_ENV_VAR: Final = "HASHLINE_DB"
@@ -79,6 +80,7 @@ def default_db_path() -> Path:
     data_home = os.environ.get("XDG_DATA_HOME")
     root = Path(data_home) if data_home else Path.home() / ".local" / "share"
     return root / "hashline" / "hashline.db"
+
 
 #: The trigram tokenizer indexes three-character sequences, so it cannot match
 #: anything shorter than that.
@@ -366,7 +368,7 @@ class Store:
         """
         where_clauses = []
         params: list[object] = []
-        
+
         if roots_only:
             where_clauses.append("n.parent_id IS NULL")
 
@@ -389,10 +391,10 @@ class Store:
         if tag_name is not None:
             sql += "JOIN note_tags nt ON nt.note_id = n.id "
             sql += "JOIN tags t ON t.id = nt.tag_id "
-            
+
         if where_clauses:
             sql += "WHERE " + " AND ".join(where_clauses) + " "
-            
+
         sql += "ORDER BY n.created_at DESC, n.id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
 
@@ -434,7 +436,7 @@ class Store:
         rows = self._conn.execute(
             "SELECT id, body, created_at, source, page, citekey, parent_id "
             "FROM notes WHERE parent_id = ? ORDER BY created_at, id",
-            (note_id,)
+            (note_id,),
         ).fetchall()
         return [_to_note(row) for row in rows]
 
@@ -657,9 +659,7 @@ class Store:
             raw=row["raw"],
         )
 
-    def list_bib_entries(
-        self, *, limit: int | None = None
-    ) -> list[BibEntry]:
+    def list_bib_entries(self, *, limit: int | None = None) -> list[BibEntry]:
         """Return all bibliography entries, ordered by citekey."""
         sql = (
             "SELECT citekey, tag, entry_type, title, author, year, doi, raw "
@@ -719,9 +719,7 @@ class Store:
     def clear_context(self) -> None:
         """Unpin the context, if one is set."""
         with self._conn:
-            self._conn.execute(
-                "DELETE FROM app_state WHERE key = ?", (_CONTEXT_KEY,)
-            )
+            self._conn.execute("DELETE FROM app_state WHERE key = ?", (_CONTEXT_KEY,))
 
     def add_note_with_context(
         self,
@@ -729,6 +727,7 @@ class Store:
         *,
         page: str | None = None,
         extra_tags: Sequence[str] = (),
+        parent_id: int | None = None,
     ) -> Note:
         """Store one note under the pinned context.
 
@@ -747,12 +746,17 @@ class Store:
         call it so pinning behaves the same from either.
         """
         context = self.get_context()
-        tags = list(context.tags)
-        tags.extend(extra_tags)
+        tags = list(extra_tags) + list(context.tags)
+
         if context.citekey is not None:
-            entry = self.get_bib_entry(context.citekey)
-            if entry is not None:
-                tags.append(entry.tag)
+            bib = self.get_bib_entry(context.citekey)
+            if bib is not None:
+                tags.append(bib.tag)
+
         return self.add_note(
-            body, page=page, citekey=context.citekey, extra_tags=tags
+            body,
+            page=page,
+            citekey=context.citekey,
+            extra_tags=tags,
+            parent_id=parent_id,
         )

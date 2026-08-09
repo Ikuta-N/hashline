@@ -71,9 +71,7 @@ class TestNotesWithoutEmbedding:
         first = store.add_note("one")
         second = store.add_note("two")
         store.upsert_embedding(first.id, model=MODEL, vector=b"\x01", dim=1)
-        assert [note.id for note in store.notes_without_embedding(MODEL)] == [
-            second.id
-        ]
+        assert [note.id for note in store.notes_without_embedding(MODEL)] == [second.id]
 
     def test_another_model_does_not_count(self, store: Store) -> None:
         note = store.add_note("one")

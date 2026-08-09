@@ -89,9 +89,7 @@ class TestMigration:
         with Store.open(db) as store:
             cols = {
                 row[1]
-                for row in store._conn.execute(
-                    "PRAGMA table_info(notes)"
-                ).fetchall()
+                for row in store._conn.execute("PRAGMA table_info(notes)").fetchall()
             }
             assert "page" in cols
             assert "citekey" in cols
@@ -122,18 +120,14 @@ class TestMigration:
             hits = store.search_notes("hello")
             assert len(hits) == 1
 
-    def test_user_version_is_updated(
-        self, tmp_path: pytest.TempPathFactory
-    ) -> None:
+    def test_user_version_is_updated(self, tmp_path: pytest.TempPathFactory) -> None:
         db = tmp_path / "test.db"  # type: ignore[union-attr]
         conn = sqlite3.connect(db)
         _build_v1_db(conn)
         conn.close()
 
         with Store.open(db) as store:
-            (version,) = store._conn.execute(
-                "PRAGMA user_version"
-            ).fetchone()
+            (version,) = store._conn.execute("PRAGMA user_version").fetchone()
             assert version == SCHEMA_VERSION
 
     def test_reopening_after_migration_is_idempotent(
@@ -150,9 +144,7 @@ class TestMigration:
         with Store.open(db) as store:
             notes = store.list_notes()
             assert len(notes) == 2
-            (version,) = store._conn.execute(
-                "PRAGMA user_version"
-            ).fetchone()
+            (version,) = store._conn.execute("PRAGMA user_version").fetchone()
             assert version == SCHEMA_VERSION
 
     def test_future_version_raises_schema_version_error(
@@ -173,9 +165,7 @@ class TestMigration:
         with Store.open(":memory:") as store:
             cols = {
                 row[1]
-                for row in store._conn.execute(
-                    "PRAGMA table_info(notes)"
-                ).fetchall()
+                for row in store._conn.execute("PRAGMA table_info(notes)").fetchall()
             }
             assert "page" in cols
             assert "citekey" in cols

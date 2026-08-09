@@ -71,9 +71,7 @@ class TestTimelineFragment:
 
 
 class TestCreateNote:
-    def test_stores_the_note_and_returns_the_timeline(
-        self, client: TestClient
-    ) -> None:
+    def test_stores_the_note_and_returns_the_timeline(self, client: TestClient) -> None:
         response = client.post("/notes", data={"body": "新しいメモ #web"})
         assert response.status_code == 200
         assert "新しいメモ #web" in response.text

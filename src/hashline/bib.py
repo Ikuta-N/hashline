@@ -16,9 +16,7 @@ from hashline.tags import normalize_tag
 _BAD_TAG_CHARS: Final = re.compile(r"[^\w-]+")
 
 #: Matches the opening of a BibTeX entry: @type{citekey,
-_ENTRY_START: Final = re.compile(
-    r"@(\w+)\s*\{([^,\s]+)\s*,", re.ASCII
-)
+_ENTRY_START: Final = re.compile(r"@(\w+)\s*\{([^,\s]+)\s*,", re.ASCII)
 
 #: Entry types that carry no bibliographic data.
 _SKIP_TYPES: Final = frozenset({"comment", "preamble", "string"})
@@ -74,9 +72,7 @@ def parse_bibtex(text: str) -> tuple[list[BibEntry], list[str]]:
         if entry_type in _SKIP_TYPES:
             continue
         if not complete:
-            problems.append(
-                f"@{entry_type}{{{citekey}}}: unclosed braces"
-            )
+            problems.append(f"@{entry_type}{{{citekey}}}: unclosed braces")
             continue
         try:
             entry = _parse_one(raw_entry, entry_type, citekey)
@@ -209,9 +205,7 @@ def _parse_one(raw: str, entry_type: str, citekey: str) -> BibEntry:
     """Parse one entry from its raw text, raising ``_ParseError`` on failure."""
     tag = citekey_tag(citekey)
     if tag is None:
-        raise _ParseError(
-            f"citekey {citekey!r} cannot be converted to a usable tag"
-        )
+        raise _ParseError(f"citekey {citekey!r} cannot be converted to a usable tag")
 
     # Find the body: everything after the first comma inside the outer braces.
     brace_pos = raw.index("{")

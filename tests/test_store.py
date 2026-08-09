@@ -139,19 +139,23 @@ class TestAddNotes:
         assert store.list_notes() == []
 
     def test_resolves_parent_index(self, store: Store) -> None:
-        notes = store.add_notes([
-            NoteDraft(body="parent"),
-            NoteDraft(body="child", parent_index=0),
-        ])
+        notes = store.add_notes(
+            [
+                NoteDraft(body="parent"),
+                NoteDraft(body="child", parent_index=0),
+            ]
+        )
         assert notes[0].id > 0
         assert notes[1].parent_id == notes[0].id
 
     def test_rejects_forward_parent_index(self, store: Store) -> None:
         with pytest.raises(ValueError, match="forward parent_index 1"):
-            store.add_notes([
-                NoteDraft(body="child", parent_index=1),
-                NoteDraft(body="parent"),
-            ])
+            store.add_notes(
+                [
+                    NoteDraft(body="child", parent_index=1),
+                    NoteDraft(body="parent"),
+                ]
+            )
 
 
 class TestGetAndDelete:
@@ -186,7 +190,7 @@ class TestGetAndDelete:
     ) -> None:
         parent = store.add_note("parent")
         store.add_note("child", parent_id=parent.id)
-        
+
         with pytest.raises(NoteHasReplies) as excinfo:
             store.delete_note(parent.id)
         assert excinfo.value.note_id == parent.id
@@ -198,7 +202,7 @@ class TestGetAndDelete:
         parent = store.add_note("parent")
         child = store.add_note("child", parent_id=parent.id)
         store.add_note("grandchild", parent_id=child.id)
-        
+
         assert store.delete_note(parent.id, recursive=True) == 3
         assert store.list_notes() == []
 
@@ -209,9 +213,9 @@ class TestGetAndDelete:
         child = store.add_note("child #python", parent_id=parent.id)
         store.upsert_embedding(parent.id, model="test", vector=b"123", dim=1)
         store.upsert_embedding(child.id, model="test", vector=b"456", dim=1)
-        
+
         store.delete_note(parent.id, recursive=True)
-        
+
         (tags_count,) = store._conn.execute("SELECT count(*) FROM note_tags").fetchone()
         assert tags_count == 0
         (embed_count,) = store._conn.execute(
@@ -224,14 +228,14 @@ class TestGetAndDelete:
         parent = store.add_note("parent thread")
         child = store.add_note("child thread", parent_id=parent.id)
         store.add_note("grandchild thread", parent_id=child.id)
-        
+
         store.delete_note(parent.id, recursive=True)
-        
+
         # FTS integrity check
         store._conn.execute(
             "INSERT INTO notes_fts(notes_fts) VALUES('integrity-check')"
         )
-        
+
         # Surviving note should still be searchable
         hits = store.search_notes("survivor")
         assert len(hits) == 1
@@ -275,7 +279,7 @@ class TestReplies:
         child2 = store.add_note("child2", parent_id=parent.id)
         # Add a grandchild to make sure it's not included
         store.add_note("grandchild", parent_id=child1.id)
-        
+
         replies = store.replies_to(parent.id)
         assert [n.id for n in replies] == [child1.id, child2.id]
 
@@ -285,10 +289,14 @@ class TestReplies:
         child2 = store.add_note("child2", parent_id=parent.id)
         gc1 = store.add_note("gc1", parent_id=child1.id)
         gc2 = store.add_note("gc2", parent_id=child1.id)
-        
+
         thread = store.thread(parent.id)
         assert [n.id for n in thread] == [
-            parent.id, child1.id, gc1.id, gc2.id, child2.id
+            parent.id,
+            child1.id,
+            gc1.id,
+            gc2.id,
+            child2.id,
         ]
 
     def test_thread_raises_on_unknown_id(self, store: Store) -> None:
