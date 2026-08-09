@@ -6,11 +6,8 @@
         hx-post="/notes"
         hx-target="#timeline"
         hx-swap="outerHTML"
+        hx-include="[name='q'], [name='tag'], [name='citekey'], [name='roots_only'], [name='limit']"
         hx-on::after-request="this.reset()">
-    <input type="hidden" name="q" value="{{ q }}">
-    <input type="hidden" name="tag" value="{{ tag }}">
-    <input type="hidden" name="citekey" value="{{ citekey }}">
-    <input type="hidden" name="roots_only" value="{{ 'true' if roots_only else '' }}">
     <input type="text" name="body" placeholder="一行で。#タグ もそのまま書く" autofocus>
     <input type="text" name="tags" placeholder="tags">
     {% if pinned_citekey %}
@@ -28,15 +25,16 @@
            hx-target="#timeline"
            hx-swap="outerHTML"
            hx-trigger="input changed delay:250ms, search"
-           hx-include="[name='tag'], [name='citekey'], [name='roots_only']">
+           hx-include="[name='tag'], [name='citekey'], [name='roots_only'], [name='limit']">
     <input type="hidden" name="tag" value="{{ tag }}">
     <input type="hidden" name="citekey" value="{{ citekey }}">
+    <input type="hidden" name="limit" value="{{ limit }}">
     <label title="Search ignores roots_only">
       <input type="checkbox" name="roots_only" value="true" {% if roots_only %}checked{% endif %} {% if q %}disabled{% endif %}
              hx-get="/notes"
              hx-target="#timeline"
              hx-swap="outerHTML"
-             hx-include="[name='q'], [name='tag'], [name='citekey']">
+             hx-include="[name='q'], [name='tag'], [name='citekey'], [name='limit']">
       hide replies
     </label>
   </form>

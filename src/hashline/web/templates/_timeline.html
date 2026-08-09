@@ -11,7 +11,9 @@
           <input type="hidden" name="q" value="{{ q }}">
           <input type="hidden" name="tag" value="{{ tag }}">
           <input type="hidden" name="citekey" value="{{ citekey }}">
-          <input type="hidden" name="roots_only" value="{{ 'true' if roots_only else '' }}">
+          {# Omitted rather than sent empty: an empty string is not a bool. #}
+          {% if roots_only %}<input type="hidden" name="roots_only" value="true">{% endif %}
+          <input type="hidden" name="limit" value="{{ limit }}">
           <button type="submit">delete the whole thread</button>
         </form>
       {% endif %}

@@ -298,6 +298,12 @@ def delete_note(
             ),
             "q": q,
             "tag": tag,
+            # The retry form re-submits these, so they have to survive the
+            # round trip -- otherwise "delete the whole thread" answers with
+            # an unfiltered timeline.
+            "citekey": citekey,
+            "roots_only": roots_only,
+            "limit": limit,
             "error": error,
             "notice": notice,
             "delete_retry_id": delete_retry_id,
