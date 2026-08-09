@@ -80,6 +80,7 @@ The Web UI implements equivalent functionality to the CLI commands:
 | `hashline import` | `POST /import` (also supports browser uploads) |
 | `hashline bib import` | `POST /bib/import` (also supports browser uploads) |
 | `hashline export` | `GET /export`, `GET /export/download` |
+| `hashline index`, `search --semantic` | *CLI only* |
 
 One deliberate difference: `hashline read start` replaces the pinned tags, while `POST /context/read` adds the reading tag to them. The context strip shows the pinned tags and the pinned work side by side with a clear button each, so starting a read there should not empty the column next to it.
 
@@ -194,6 +195,9 @@ Things worth knowing:
   fall back to a substring scan, come back newest-first, and score `0.00`.
 - The whole query is treated as literal text. `#`, `-`, `*` and `"` are
   searched for, not interpreted as operators.
+- `--semantic` blends in a ranking by meaning; see
+  [Semantic search](#semantic-search). It needs the `ml` extra and a
+  `hashline index` pass, and says so when either is missing.
 
 ## Upgrading
 
@@ -241,41 +245,88 @@ src/hashline/
   outline.py    Markdown outline building and rendering (pure functions)
   cli.py        Typer adapter; owns all filesystem I/O
   schema.sql    tables, indexes, FTS5 index and its sync triggers
-  web/app.py    FastAPI + HTMX adapter
-  ml/search.py  ranking maths for semantic search (pure numpy)
+  web/app.py       FastAPI + HTMX adapter
+  ml/search.py     ranking maths for semantic search (pure numpy)
+  ml/embed.py      embedding backend behind the optional `ml` extra
+  ml/protocols.py  the Embedder protocol; numpy and nothing else
 tests/
 ```
 
 The core (`models`, `tags`, `store`, `importer`, `bib`, `outline`) is plain Python
 over the standard library plus numpy. The CLI and the web UI are thin adapters over it.
 
-## Roadmap
+## Semantic search
 
-Semantic search: retrieve notes by meaning, not just keyword, alongside the
-FTS5 index.
-
-The groundwork is in place. The `embeddings` table is already in the schema —
-`(note_id, model)` keyed so several models can coexist — so adding it needs no
-migration and no reimport. `hashline.ml.search` holds the ranking maths
-(cosine similarity plus reciprocal rank fusion for blending the keyword and
-semantic rankings); it is pure numpy, imports no model runtime, and is covered
-by the default test suite.
-
-`hashline.ml.embed` wraps the embedding backend. `sentence-transformers` is
-imported inside functions, so importing the module costs nothing and the app
-runs fully without the extra — `is_available()` reports whether semantic search
-can run, and asking for an embedding without it raises `MlExtraNotInstalled`
-rather than an ImportError. The vector codec is pure numpy and is covered by
-the default suite; only the model-dependent tests are `slow`.
+Retrieve notes by meaning, not only by the characters in them. Optional: the
+app installs, starts and works fully without it.
 
 ```bash
-uv sync --extra ml   # pulls torch (CPU build) and sentence-transformers
-uv run pytest -m slow
+uv sync --extra ml            # torch (CPU build) and sentence-transformers
+uv run hashline index         # embed every note not embedded yet
+uv run hashline search 睡眠 --semantic
 ```
 
-What is left is wiring it into the CLI and the web UI: an indexing pass over
-`notes_without_embedding`, then blending the two rankings with
-`ml.search.fuse_rankings`.
+```
+0.0164      1  2026-08-09 22:18  昨日は寝不足で、朝から頭が回らなかった  [日記]
+0.0161      3  2026-08-09 22:18  夜ふかしをやめたい                      [日記]
+```
+
+Neither note contains 睡眠, so `hashline search 睡眠` on its own finds nothing.
+
+`hashline index` walks `notes_without_embedding`, so re-running it costs
+nothing; `--rebuild` re-embeds everything and `--limit` stops early. A search
+that finds notes added since the last index says how many are missing rather
+than leaving a short result list as the only clue.
+
+### How the two rankings are combined
+
+BM25 and cosine similarity are on unrelated scales, so the **ranks** are fused,
+not the scores: each list contributes `1 / (60 + rank)` per note
+(reciprocal rank fusion). No normalization constant to tune, and a third
+ranker could be added without revisiting the first two. Both sides contribute
+their top 100 regardless of `--limit`, so a note that both rankers place 25th
+is not beaten by one that a single ranker happened to put 20th.
+
+### How vectors are stored
+
+The `embeddings` table has been in the schema from the first release —
+`(note_id, model)` keyed so several models coexist — so this needed **no
+migration and no reimport**.
+
+- **`float32`, little-endian, fixed explicitly.** A `.db` file is portable
+  between machines, so byte order is part of the format rather than a property
+  of whoever wrote the row. 384 dimensions is 1.5 KB per note.
+- **`dim` lives in its column, not in a header inside the BLOB.** The row
+  already records it; a second copy would be a second thing that can disagree.
+  `unpack_vector(blob, expected_dim=...)` cross-checks the two.
+- **Vectors are L2-normalized on write,** so a search is one matrix product.
+- **`embeddings.model` records the prefix convention, not just the model
+  name** (`intfloat/multilingual-e5-small+query`). e5 returns different vectors
+  for the same text under a different prefix, and e5-small is 384-wide exactly
+  like the English MiniLM model it replaced — so no dimension check could catch
+  vectors from the two being mixed. Only this key can, and changing either the
+  model or the prefix leaves the old rows sitting under their own key,
+  unread and unharmed.
+
+Both sides — the note and the search for it — are embedded with the `query: `
+prefix. Finding notes that mean the same thing as a phrase is a symmetric task,
+which is the case the e5 authors give for one prefix throughout.
+
+### What runs where
+
+`ml/search.py` is pure numpy: arrays and rank lists in, ranked ids out. It
+imports neither torch nor sentence-transformers, and its tests are part of the
+default suite. `ml/embed.py` imports the backend inside functions, so the
+module costs nothing to import and `is_available()` can report whether semantic
+search can run at all. `ml/protocols.py` is the one-method `Embedder` protocol
+both sides agree on, which is what lets the CLI tests inject a fake and run in
+CI without downloading anything.
+
+The CLI imports all of this inside the two commands that need it: numpy alone
+takes 86 ms against 38 ms for the whole CLI, and `hashline add` should not pay
+that.
+
+Not yet in the web UI — `--semantic` is CLI-only for now.
 
 ## License
 
