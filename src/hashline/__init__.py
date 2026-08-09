@@ -1,2 +1,3 @@
-def main() -> None:
-    print("Hello from hashline!")
+"""hashline: local-first micro-notes."""
+
+__version__ = "0.1.0"

@@ -1,8 +1,10 @@
 [project]
 name = "hashline"
 version = "0.1.0"
-description = "Add your description here"
+description = "Local-first micro-notes: one line, inline #hashtags, tag and full-text retrieval."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Ikuta-N", email = "t.ikuta.naoki@gmail.com" }
 ]
@@ -10,15 +12,13 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.141.1",
     "jinja2>=3.1.6",
-    "matplotlib>=3.11.1",
     "numpy>=2.5.1",
-    "pandas>=3.0.5",
     "typer>=0.27.1",
     "uvicorn[standard]>=0.52.1",
 ]
 
 [project.scripts]
-hashline = "hashline:main"
+hashline = "hashline.cli:app"
 
 [project.optional-dependencies]
 ml = [
@@ -48,8 +48,16 @@ explicit = true
 torch = { index = "pytorch-cpu" }
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = ["slow: requires downloading an embedding model"]
 addopts = "-m 'not slow'"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
 
 [[tool.mypy.overrides]]
 module = ["sentence_transformers.*", "torch.*"]
