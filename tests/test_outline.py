@@ -1,7 +1,13 @@
 from datetime import UTC, datetime
 
 from hashline.models import Note
-from hashline.outline import OutlineNode, build_tree, render_markdown
+from hashline.outline import (
+    OutlineItem,
+    OutlineNode,
+    build_tree,
+    render_markdown,
+    split_outline,
+)
 
 
 class TestBuildTree:
@@ -79,13 +85,7 @@ class TestRenderMarkdown:
 
         roots = build_tree([n1, n2])
         out = render_markdown(roots)
-        assert out == (
-            "- line 1\n"
-            "  line 2\n"
-            "  line 3\n"
-            "  - child\n"
-            "    more text\n"
-        )
+        assert out == ("- line 1\n  line 2\n  line 3\n  - child\n    more text\n")
 
     def test_empty_body(self) -> None:
         n1 = Note(1, "", datetime(2020, 1, 1, tzinfo=UTC))
@@ -99,3 +99,42 @@ class TestRenderMarkdown:
         roots = build_tree([n1, n2])
         out = render_markdown(roots, indent="    ")
         assert out == "- root\n    - child\n"
+
+
+class TestSplitOutline:
+    def test_preamble_and_bullets(self) -> None:
+        text = "preamble\n- one\n  - two\n- three"
+        items = split_outline(text)
+        assert items == [
+            OutlineItem("preamble", 0),
+            OutlineItem("one", 0),
+            OutlineItem("two", 1),
+            OutlineItem("three", 0),
+        ]
+
+    def test_code_fence(self) -> None:
+        text = "- one\n  ```\n  - not a bullet\n  ```\n- two"
+        items = split_outline(text)
+        assert items == [
+            OutlineItem("one\n```\n- not a bullet\n```", 0),
+            OutlineItem("two", 0),
+        ]
+
+    def test_mixed_indent(self) -> None:
+        text = "- one\n  - two\n    - three\n\t- four\n- five"
+        items = split_outline(text)
+        assert items == [
+            OutlineItem("one", 0),
+            OutlineItem("two", 1),
+            OutlineItem("three", 2),
+            OutlineItem("four", 2),
+            OutlineItem("five", 0),
+        ]
+
+    def test_multi_line_item(self) -> None:
+        text = "- one\n  two\n  three\n- four"
+        items = split_outline(text)
+        assert items == [
+            OutlineItem("one\ntwo\nthree", 0),
+            OutlineItem("four", 0),
+        ]

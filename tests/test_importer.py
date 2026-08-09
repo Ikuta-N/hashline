@@ -10,6 +10,8 @@ from hashline.importer import (
     split_headings,
     split_lines,
 )
+from hashline.outline import build_tree, render_markdown
+from hashline.store import Store
 
 
 class TestSplitLines:
@@ -117,6 +119,32 @@ class TestParseDocument:
     def test_empty_document_yields_nothing(self) -> None:
         assert parse_document(Document(source="a.txt", text="")) == []
 
+    def test_outline_mode(self) -> None:
+        text = "preamble\n- one\n  - two\n- three"
+        doc = Document(source="a.md", text=text)
+        drafts = parse_document(doc, mode="outline")
+
+        assert len(drafts) == 4
+        assert drafts[0].body == "preamble"
+        assert drafts[0].parent_index is None
+        assert drafts[1].body == "one"
+        assert drafts[1].parent_index is None
+        assert drafts[2].body == "two"
+        assert drafts[2].parent_index == 1
+        assert drafts[3].body == "three"
+        assert drafts[3].parent_index is None
+
+    def test_outline_clamps_overdeep_jumps(self) -> None:
+        text = "- one\n        - jump"  # jumped by 8 spaces, depth 2 but clamped to 1
+        doc = Document(source="a.md", text=text)
+        drafts = parse_document(doc, mode="outline")
+
+        assert len(drafts) == 2
+        assert drafts[0].body == "one"
+        assert drafts[0].parent_index is None
+        assert drafts[1].body == "jump"
+        assert drafts[1].parent_index == 0
+
 
 class TestParseDocuments:
     def test_keeps_document_order(self) -> None:
@@ -155,18 +183,14 @@ class TestAgainstFixtures:
 
     def test_heading_mode_on_a_markdown_file(self, notes_dir: Path) -> None:
         text = (notes_dir / "daily.md").read_text(encoding="utf-8")
-        drafts = parse_document(
-            Document(source="daily.md", text=text), mode="heading"
-        )
+        drafts = parse_document(Document(source="daily.md", text=text), mode="heading")
         assert len(drafts) == 3
         assert drafts[0].body.startswith("# 2026-08-09")
         assert drafts[2].body == "## やること\n\nREADME を書く #todo"
 
     def test_fenced_code_does_not_start_a_section(self, notes_dir: Path) -> None:
         text = (notes_dir / "fenced.md").read_text(encoding="utf-8")
-        drafts = parse_document(
-            Document(source="fenced.md", text=text), mode="heading"
-        )
+        drafts = parse_document(Document(source="fenced.md", text=text), mode="heading")
         assert [draft.body.splitlines()[0] for draft in drafts] == [
             "前書き。ここは見出しの前にある。",
             "# コード例",
@@ -176,3 +200,28 @@ class TestAgainstFixtures:
     def test_empty_file_yields_nothing(self, notes_dir: Path) -> None:
         text = (notes_dir / "empty.md").read_text(encoding="utf-8")
         assert parse_document(Document(source="empty.md", text=text)) == []
+
+    def test_outline_round_trip(self, tmp_path: Path) -> None:
+        plan_path = Path("tests/fixtures/outline/plan.md")
+        text = plan_path.read_text(encoding="utf-8")
+        doc = Document(source="plan.md", text=text)
+        drafts = parse_document(doc, mode="outline")
+        
+        db_path = tmp_path / "test.db"
+        store = Store.open(db_path)
+        store.init_schema()
+        store.add_notes(drafts)
+
+        notes = list(store.list_notes())
+        roots = build_tree(notes)
+        out = render_markdown(roots)
+
+        # Check that the shape matches
+        doc_parsed = parse_document(
+            Document(source="plan.md", text=out), mode="outline"
+        )
+
+        assert len(drafts) == len(doc_parsed)
+        for expected, actual in zip(drafts, doc_parsed, strict=True):
+            assert expected.parent_index == actual.parent_index
+            assert expected.body.strip() == actual.body.strip()
