@@ -118,6 +118,8 @@ def _to_note(row: sqlite3.Row) -> Note:
         body=row["body"],
         created_at=datetime.fromisoformat(row["created_at"]),
         source=row["source"],
+        page=row["page"],
+        citekey=row["citekey"],
     )
 
 
@@ -201,6 +203,8 @@ class Store:
         created_at: datetime | None = None,
         source: str | None = None,
         extra_tags: Sequence[str] = (),
+        page: str | None = None,
+        citekey: str | None = None,
     ) -> Note:
         """Store one note, linking both its inline #tags and ``extra_tags``."""
         draft = NoteDraft(
@@ -208,6 +212,8 @@ class Store:
             created_at=created_at,
             source=source,
             extra_tags=tuple(extra_tags),
+            page=page,
+            citekey=citekey,
         )
         return self.add_notes([draft])[0]
 
@@ -231,9 +237,13 @@ class Store:
             raise ValueError("note body must not be blank")
         created_at = draft.created_at if draft.created_at is not None else _utc_now()
         created_text = _to_text(created_at)
+        # Blank/whitespace-only page normalises to None.
+        page = draft.page.strip() if draft.page else None
+        page = page if page else None
         cursor = self._conn.execute(
-            "INSERT INTO notes (body, created_at, source) VALUES (?, ?, ?)",
-            (body, created_text, draft.source),
+            "INSERT INTO notes (body, created_at, source, page, citekey) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (body, created_text, draft.source, page, draft.citekey),
         )
         note_id = cursor.lastrowid
         if note_id is None:  # pragma: no cover - sqlite always reports it here
@@ -244,6 +254,8 @@ class Store:
             body=body,
             created_at=datetime.fromisoformat(created_text),
             source=draft.source,
+            page=page,
+            citekey=draft.citekey,
         )
 
     @staticmethod
@@ -274,18 +286,36 @@ class Store:
 
     def get_note(self, note_id: int) -> Note | None:
         row = self._conn.execute(
-            "SELECT id, body, created_at, source FROM notes WHERE id = ?",
+            "SELECT id, body, created_at, source, page, citekey "
+            "FROM notes WHERE id = ?",
             (note_id,),
         ).fetchone()
         return _to_note(row) if row is not None else None
 
     def list_notes(
-        self, *, tag: str | None = None, limit: int = 50, offset: int = 0
+        self,
+        *,
+        tag: str | None = None,
+        citekey: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
     ) -> list[Note]:
-        """Return the timeline, newest first, optionally narrowed to one tag."""
+        """Return the timeline, newest first.
+
+        Optionally narrowed to one tag or citekey.
+        """
+        if citekey is not None:
+            rows = self._conn.execute(
+                "SELECT id, body, created_at, source, page, citekey FROM notes "
+                "WHERE citekey = ? "
+                "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+                (citekey, limit, offset),
+            ).fetchall()
+            return [_to_note(row) for row in rows]
+
         if tag is None:
             rows = self._conn.execute(
-                "SELECT id, body, created_at, source FROM notes "
+                "SELECT id, body, created_at, source, page, citekey FROM notes "
                 "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
                 (limit, offset),
             ).fetchall()
@@ -295,7 +325,8 @@ class Store:
         if name is None:
             return []
         rows = self._conn.execute(
-            "SELECT n.id, n.body, n.created_at, n.source FROM notes n "
+            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey "
+            "FROM notes n "
             "JOIN note_tags nt ON nt.note_id = n.id "
             "JOIN tags t ON t.id = nt.tag_id "
             "WHERE t.name = ? "
@@ -362,7 +393,8 @@ class Store:
     ) -> list[Note]:
         """Return notes this model has not embedded yet, oldest id first."""
         sql = (
-            "SELECT n.id, n.body, n.created_at, n.source FROM notes n "
+            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey "
+            "FROM notes n "
             "LEFT JOIN embeddings e ON e.note_id = n.id AND e.model = ? "
             "WHERE e.note_id IS NULL ORDER BY n.id"
         )
@@ -410,7 +442,7 @@ class Store:
         self, text: str, tag: str | None, limit: int
     ) -> list[SearchHit]:
         sql = (
-            "SELECT n.id, n.body, n.created_at, n.source, "
+            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey, "
             "-bm25(notes_fts) AS score "
             "FROM notes_fts JOIN notes n ON n.id = notes_fts.rowid "
             "WHERE notes_fts MATCH ?"
@@ -429,7 +461,8 @@ class Store:
         self, text: str, tag: str | None, limit: int
     ) -> list[SearchHit]:
         sql = (
-            "SELECT n.id, n.body, n.created_at, n.source FROM notes n "
+            "SELECT n.id, n.body, n.created_at, n.source, n.page, n.citekey "
+            "FROM notes n "
             "WHERE n.body LIKE ? ESCAPE '\\'"
         )
         params: list[object] = [_as_like_pattern(text)]

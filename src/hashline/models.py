@@ -16,6 +16,8 @@ class Note:
     body: str
     created_at: datetime
     source: str | None = None
+    page: str | None = None
+    citekey: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +61,8 @@ class NoteDraft:
     created_at: datetime | None = None
     source: str | None = None
     extra_tags: tuple[str, ...] = ()
+    page: str | None = None
+    citekey: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
