@@ -1,12 +1,15 @@
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from hashline.importer import (
     SPLITTERS,
     Document,
+    SplitMode,
     parse_document,
     parse_documents,
+    split_heading_sections,
     split_headings,
     split_lines,
 )
@@ -179,9 +182,70 @@ class TestParseDocuments:
         assert drafts[3].parent_index == 2
 
 
+class TestSplitHeadingSections:
+    """A Markdown document is already a tree; heading mode now keeps it.
+
+    Importing a chapter/section document used to give a flat pile of notes
+    with the structure thrown away, and outline mode was no help -- with no
+    bullets to split on it collapsed the whole file into a single note.
+    """
+
+    def test_a_deeper_heading_is_a_child(self) -> None:
+        assert split_heading_sections("# One\n## Two") == [("# One", 0), ("## Two", 1)]
+
+    def test_a_heading_at_the_same_level_is_a_sibling(self) -> None:
+        sections = split_heading_sections("# 1\n## 1.1\n### 1.1.1\n## 1.2")
+        assert [depth for _, depth in sections] == [0, 1, 2, 1]
+
+    def test_levels_are_ranked_not_counted(self) -> None:
+        """A document that jumps from # to ### describes two levels."""
+        assert split_heading_sections("# A\n### C") == [("# A", 0), ("### C", 1)]
+
+    def test_a_shallower_heading_climbs_back_out(self) -> None:
+        sections = split_heading_sections("# A\n## B\n# C")
+        assert [depth for _, depth in sections] == [0, 1, 0]
+
+    def test_text_before_the_first_heading_is_its_own_root(self) -> None:
+        # Not a parent of the heading that follows: it is prose that happened
+        # to come first, and adopting the whole document under it would be
+        # a structure the author never wrote.
+        sections = split_heading_sections("preamble\n# One")
+        assert sections == [("preamble", 0), ("# One", 0)]
+
+    def test_a_heading_inside_a_fence_does_not_nest_anything(self) -> None:
+        text = "# One\n\n```\n### not a heading\n```\n\n## Two"
+        assert [depth for _, depth in split_heading_sections(text)] == [0, 1]
+
+
+class TestHeadingModeHierarchy:
+    def test_sections_become_a_tree_of_notes(self) -> None:
+        text = "# 第1章\n本文\n## 1.1 節\n中身\n### 1.1.1 項\n詳細\n## 1.2 節\nほか"
+        drafts = parse_document(Document(source="d.md", text=text), mode="heading")
+        assert [draft.parent_index for draft in drafts] == [None, 0, 1, 0]
+
+    def test_a_flat_document_still_gives_flat_notes(self) -> None:
+        text = "# One\nbody\n# Two\nbody"
+        drafts = parse_document(Document(source="d.md", text=text), mode="heading")
+        assert [draft.parent_index for draft in drafts] == [None, None]
+
+    def test_line_mode_is_still_flat(self) -> None:
+        text = "# One\n## Two\n### Three"
+        drafts = parse_document(Document(source="d.md", text=text), mode="line")
+        assert [draft.parent_index for draft in drafts] == [None, None, None]
+
+
 class TestSplitters:
-    def test_registry_covers_both_modes(self) -> None:
-        assert set(SPLITTERS) == {"line", "heading"}
+    def test_registry_covers_every_mode(self) -> None:
+        """Outline used to be special-cased in parse_document rather than
+        registered, so the registry did not actually list every mode it
+        claimed to. One lookup now serves all three."""
+        assert set(SPLITTERS) == set(get_args(SplitMode))
+
+    def test_every_splitter_reports_a_depth(self) -> None:
+        for name, splitter in SPLITTERS.items():
+            items = splitter("- a\n  - b\n")
+            assert items, f"{name} split nothing"
+            assert all(isinstance(depth, int) for _, depth in items), name
 
 
 class TestAgainstFixtures:

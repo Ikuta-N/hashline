@@ -15,9 +15,11 @@ from hashline.tags import normalize_tag
 #: How a document is cut into notes.
 SplitMode = Literal["line", "heading", "outline"]
 
-#: The one interface a split strategy has to satisfy: document text in, note
-#: bodies out. A new mode is a function plus an entry in ``SPLITTERS``.
-Splitter = Callable[[str], list[str]]
+#: The one interface a split strategy has to satisfy: document text in, one
+#: ``(body, depth)`` per note out. ``depth`` is the note's level in the tree the
+#: document describes, and is 0 throughout for a mode that has no hierarchy.
+#: A new mode is a function plus an entry in ``SPLITTERS``.
+Splitter = Callable[[str], list[tuple[str, int]]]
 
 _FENCE_RE: Final = re.compile(r" {0,3}(`{3,}|~{3,})")
 _HEADING_RE: Final = re.compile(r" {0,3}#{1,6}(?:\s|$)")
@@ -51,23 +53,71 @@ def split_lines(text: str) -> list[str]:
     return [stripped for line in text.splitlines() if (stripped := line.strip())]
 
 
+def split_heading_sections(text: str) -> list[tuple[str, int]]:
+    """One note per Markdown section, with its depth in the heading tree.
+
+    ``## 1.1`` under ``# 1`` is a child of it, and a later ``## 1.2`` is a
+    sibling of ``## 1.1`` rather than a child -- so a chapter/section/subsection
+    document comes in as the tree it already was on the page.
+
+    Levels are ranked, not counted: a document that jumps from ``#`` to ``###``
+    describes two levels, not three. Text before the first heading is a root of
+    its own, so nothing is dropped and nothing is adopted by a heading that
+    happens to follow it.
+    """
+    sections: list[list[str]] = [[]]
+    #: Heading levels of the current ancestor chain. The preamble holds no
+    #: level, which is why it comes out at depth 0 alongside the first heading.
+    ancestors: list[int] = []
+    depths: list[int] = [0]
+
+    for line, is_fenced in iter_fenced_lines(text):
+        heading = None if is_fenced else _HEADING_RE.match(line)
+        if heading is not None:
+            level = heading.group(0).count("#")
+            while ancestors and ancestors[-1] >= level:
+                ancestors.pop()
+            ancestors.append(level)
+            sections.append([])
+            depths.append(len(ancestors) - 1)
+        sections[-1].append(line)
+
+    return [
+        (body, depth)
+        for section, depth in zip(sections, depths, strict=True)
+        if (body := "\n".join(section).strip())
+    ]
+
+
 def split_headings(text: str) -> list[str]:
     """One note per Markdown section: a heading plus the lines under it.
 
     Text before the first heading becomes its own note, so nothing is dropped.
     A ``#`` inside a fenced code block is code, not a heading.
     """
-    sections: list[list[str]] = [[]]
-    for line, is_fenced in iter_fenced_lines(text):
-        if not is_fenced and _HEADING_RE.match(line):
-            sections.append([])
-        sections[-1].append(line)
-    return [body for section in sections if (body := "\n".join(section).strip())]
+    return [body for body, _ in split_heading_sections(text)]
+
+
+def _line_items(text: str) -> list[tuple[str, int]]:
+    """``split_lines`` as a splitter. Line mode describes no hierarchy."""
+    return [(body, 0) for body in split_lines(text)]
+
+
+def _outline_items(text: str) -> list[tuple[str, int]]:
+    """``outline.split_outline`` as a splitter.
+
+    Imported here rather than at module scope: ``hashline.outline`` uses
+    ``iter_fenced_lines`` from this module, so the two would import each other.
+    """
+    from hashline.outline import split_outline
+
+    return [(item.body, item.depth) for item in split_outline(text)]
 
 
 SPLITTERS: Final[Mapping[SplitMode, Splitter]] = {
-    "line": split_lines,
-    "heading": split_headings,
+    "line": _line_items,
+    "heading": split_heading_sections,
+    "outline": _outline_items,
 }
 
 
@@ -82,25 +132,18 @@ def parse_document(
     ``common_tags`` are carried as metadata; the note body is left exactly as it
     was written. Raises ``ValueError`` for an unknown ``mode`` or an unusable tag.
     """
-    from hashline.outline import OutlineItem, split_outline
-
-    if mode == "outline":
-        items = split_outline(doc.text)
-    else:
-        try:
-            splitter = SPLITTERS[mode]
-        except KeyError:
-            raise ValueError(f"unknown split mode: {mode!r}") from None
-        items = [OutlineItem(body=body, depth=0) for body in splitter(doc.text)]
+    try:
+        splitter = SPLITTERS[mode]
+    except KeyError:
+        raise ValueError(f"unknown split mode: {mode!r}") from None
+    items = splitter(doc.text)
 
     extra = _normalize_common_tags(common_tags)
 
     drafts = []
     stack: list[tuple[int, int]] = []  # (depth, index)
 
-    for i, item in enumerate(items):
-        target_depth = item.depth
-
+    for i, (body, target_depth) in enumerate(items):
         while stack and stack[-1][0] >= target_depth:
             stack.pop()
 
@@ -110,7 +153,7 @@ def parse_document(
         actual_depth = min(target_depth, parent_depth + 1)
 
         draft = NoteDraft(
-            body=item.body,
+            body=body,
             source=doc.source,
             extra_tags=extra,
             parent_index=parent_index,

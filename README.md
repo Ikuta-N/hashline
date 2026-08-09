@@ -65,11 +65,17 @@ reply threads.
 hashline import PATH... [--mode line|heading|outline] [--tag NAME] [--dry-run]
 ```
 
-- `--mode line` (default) makes one note per non-blank line.
+The mode decides which part of the file becomes the hierarchy.
+
+- `--mode line` (default) makes one note per non-blank line. No hierarchy.
 - `--mode heading` makes one note per Markdown section — a heading plus the
-  lines under it. Text before the first heading is kept as its own note, and a
-  `#` inside a fenced code block does not start a section.
-- `--mode outline` parses indented bullet lists into note trees, matching the format produced by `hashline export`.
+  lines under it — **nested by heading level**, so `##` under `#` becomes its
+  reply and a later `##` is its sibling. Levels are ranked, not counted: a
+  document that jumps from `#` to `###` describes two levels, not three. Text
+  before the first heading is kept as its own root, and a `#` inside a fenced
+  code block does not start a section.
+- `--mode outline` nests by bullet indentation, matching the format produced by
+  `hashline export`.
 - `--tag NAME` is repeatable and tags every note from that run. It is stored as
   a tag only: **the note body is left exactly as written**, so `--tag` names do
   not turn up in full-text search results.
