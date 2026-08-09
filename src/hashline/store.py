@@ -776,9 +776,12 @@ class Store:
             if bib is not None:
                 tags.append(bib.tag)
             else:
+                # The core is shared by both adapters, so this names the
+                # action rather than the CLI command for it -- the web shows
+                # this string verbatim to someone who has no terminal open.
                 raise ValueError(
                     f"the pinned work {context.citekey!r} is no longer in "
-                    "the bibliography; run `hashline read stop` or re-import it"
+                    "the bibliography; stop reading it or import it again"
                 )
 
         return self.add_note(
