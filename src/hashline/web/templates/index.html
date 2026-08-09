@@ -7,13 +7,16 @@
         hx-target="#timeline"
         hx-swap="outerHTML"
         hx-on::after-request="this.reset()">
+    <input type="hidden" name="q" value="{{ q }}">
+    <input type="hidden" name="tag" value="{{ tag }}">
+    <input type="hidden" name="citekey" value="{{ citekey }}">
+    <input type="hidden" name="roots_only" value="{{ 'true' if roots_only else '' }}">
     <input type="text" name="body" placeholder="一行で。#タグ もそのまま書く" autofocus>
     <input type="text" name="tags" placeholder="tags">
     {% if pinned_citekey %}
       <input type="text" name="page" placeholder="page">
     {% endif %}
     <label><input type="checkbox" name="no_context"> no_context</label>
-    <input type="hidden" name="tag" value="{{ tag }}">
     <button type="submit">add</button>
   </form>
 

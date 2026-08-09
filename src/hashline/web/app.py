@@ -116,9 +116,13 @@ def create_note(
     request: Request,
     store: StoreDep,
     body: Annotated[str, Form()],
+    q: Annotated[str, Form()] = "",
     tag: Annotated[str, Form()] = "",
     tags: Annotated[str, Form()] = "",
     page: Annotated[str, Form()] = "",
+    citekey: Annotated[str, Form()] = "",
+    roots_only: Annotated[bool, Form()] = False,
+    limit: Annotated[int, Form()] = 50,
     no_context: Annotated[bool, Form()] = False,
     parent_id: Annotated[int | None, Form()] = None,
 ) -> HTMLResponse:
@@ -159,8 +163,8 @@ def create_note(
         request=request,
         name="_timeline.html",
         context={
-            "notes": _timeline(store, q="", tag=tag),
-            "q": "",
+            "notes": _timeline(store, q=q, tag=tag, citekey=citekey, roots_only=roots_only, limit=limit),
+            "q": q,
             "tag": tag,
             "error": error,
         },
@@ -172,12 +176,14 @@ def reply_fragment(
     request: Request,
     store: StoreDep,
     note_id: int,
+    tag: str = "",
+    q: str = "",
 ) -> HTMLResponse:
     """The reply form fragment."""
     return templates.TemplateResponse(
         request=request,
         name="_reply.html",
-        context={"note_id": note_id, "pinned_citekey": store.get_context().citekey},
+        context={"note_id": note_id, "pinned_citekey": store.get_context().citekey, "tag": tag, "q": q},
     )
 
 
@@ -220,6 +226,9 @@ def delete_note(
     recursive: Annotated[bool, Form()] = False,
     tag: Annotated[str, Form()] = "",
     q: Annotated[str, Form()] = "",
+    citekey: Annotated[str, Form()] = "",
+    roots_only: Annotated[bool, Form()] = False,
+    limit: Annotated[int, Form()] = 50,
 ) -> HTMLResponse:
     error: str | None = None
     notice: str | None = None
@@ -244,7 +253,7 @@ def delete_note(
         request=request,
         name="_timeline.html",
         context={
-            "notes": _timeline(store, q=q, tag=tag),
+            "notes": _timeline(store, q=q, tag=tag, citekey=citekey, roots_only=roots_only, limit=limit),
             "q": q,
             "tag": tag,
             "error": error,

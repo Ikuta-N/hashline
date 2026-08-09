@@ -3,6 +3,8 @@
       hx-target="#timeline"
       hx-swap="outerHTML">
   <input type="hidden" name="parent_id" value="{{ note_id }}">
+  <input type="hidden" name="q" value="{{ q }}">
+  <input type="hidden" name="tag" value="{{ tag }}">
   <input type="text" name="body" placeholder="reply..." autofocus>
   <input type="text" name="tags" placeholder="tags">
   {% if pinned_citekey %}
