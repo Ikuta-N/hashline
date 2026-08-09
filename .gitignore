@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# cache and credential
+.venv/
+__pycache__/
+*.db
+*.sqlite3
+.env
+.pytest_cache/
+.mypy_cache/
+figs/*.pdf
+
+# local file
+*.local.json
