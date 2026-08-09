@@ -617,3 +617,102 @@ class TestIndex:
     def test_an_empty_database_needs_no_model(self, db: Path) -> None:
         # No fake_model fixture: nothing should try to load one.
         assert "nothing to index" in run(db, "index")
+
+
+class TestSemanticSearch:
+    def test_finds_a_note_the_keyword_index_cannot_reach(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        """The whole point: a match with no shared substring.
+
+        The fake embedder scores on shared characters, so "xyz" reaches the
+        note containing them while the trigram index -- searched for the
+        literal phrase -- does not.
+        """
+        run(db, "add", "aaa xyz aaa")
+        run(db, "add", "bbb ccc ddd")
+        run(db, "index")
+        assert "no matches" in run(db, "search", "xyz zyx")
+        assert "aaa xyz aaa" in run(db, "search", "xyz zyx", "--semantic")
+
+    def test_a_keyword_match_still_ranks(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        run(db, "add", "bm25 を調べた")
+        run(db, "index")
+        assert "bm25 を調べた" in run(db, "search", "bm25", "--semantic")
+
+    def test_scores_are_the_fused_ranks(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        # RRF with k=60: a note first in both lists scores 2/61 = 0.0328.
+        run(db, "add", "one note")
+        run(db, "index")
+        assert "0.0328" in run(db, "search", "one note", "--semantic")
+
+    def test_honours_the_tag_filter(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        run(db, "add", "aaa xyz #keep")
+        run(db, "add", "aaa xyz #drop")
+        run(db, "index")
+        output = run(db, "search", "xyz", "--semantic", "--tag", "keep")
+        assert "#keep" in output
+        assert "#drop" not in output
+
+    def test_honours_limit(self, db: Path, fake_model: FakeEmbedder) -> None:
+        for body in ("aaa one", "aaa two", "aaa three"):
+            run(db, "add", body)
+        run(db, "index")
+        output = run(db, "search", "aaa", "--semantic", "--limit", "2")
+        assert len([line for line in output.splitlines() if line.strip()]) == 2
+
+    def test_says_so_when_nothing_is_indexed(self, db: Path) -> None:
+        run(db, "add", "one")
+        output = run(db, "search", "one", "--semantic")
+        assert "run `hashline index`" in output
+        assert "no matches" not in output
+
+    def test_warns_about_notes_added_since_the_last_index(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        """A short result list must not be the only sign of a stale index."""
+        run(db, "add", "aaa one")
+        run(db, "index")
+        run(db, "add", "aaa two")
+        result = runner.invoke(app, ["--db", str(db), "search", "aaa", "--semantic"])
+        assert result.exit_code == 0
+        assert "1 notes are not indexed yet" in result.output
+
+    def test_without_the_extra_it_says_how_to_get_it(
+        self, db: Path, fake_model: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run(db, "add", "one")
+        run(db, "index")
+
+        def refuse(name: str = "") -> object:
+            raise embed.MlExtraNotInstalled("needs the 'ml' extra: uv sync --extra ml")
+
+        monkeypatch.setattr("hashline.ml.embed.load_model", refuse)
+        result = runner.invoke(app, ["--db", str(db), "search", "one", "--semantic"])
+        assert result.exit_code == 1
+        assert "--extra ml" in result.output
+
+    def test_a_plain_search_needs_no_model(self, db: Path) -> None:
+        # No fake_model fixture: the keyword path must not touch the backend.
+        run(db, "add", "bm25 を調べた")
+        assert "bm25 を調べた" in run(db, "search", "bm25")
+
+    def test_reports_no_matches_like_the_keyword_path(
+        self, db: Path, fake_model: FakeEmbedder
+    ) -> None:
+        """The two paths answer an empty result the same way.
+
+        A ranking over indexed notes always has entries, so a zero limit is
+        the only way to empty it -- but the two searches sit behind one
+        command and must not disagree about what nothing looks like.
+        """
+        run(db, "add", "one")
+        run(db, "index")
+        assert "no matches" in run(db, "search", "one", "--limit", "0")
+        assert "no matches" in run(db, "search", "one", "--semantic", "--limit", "0")

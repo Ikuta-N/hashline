@@ -27,6 +27,11 @@ _WHITESPACE_RE: Final = re.compile(r"\s+")
 #: small enough that progress appears on a large library.
 _EMBED_BATCH: Final = 32
 
+#: How deep each ranker contributes to the fusion, regardless of --limit.
+#: Fusing only the top 20 of each would let a note both rankers place 25th
+#: lose to one that a single ranker happened to put 20th.
+_FUSION_DEPTH: Final = 100
+
 
 class Mode(StrEnum):
     """How an imported document is cut into notes."""
@@ -215,9 +220,20 @@ def search(
         str | None, typer.Option("--tag", "-t", help="Only this tag.")
     ] = None,
     limit: Annotated[int, typer.Option("--limit", "-n")] = 20,
+    semantic: Annotated[
+        bool,
+        typer.Option("--semantic", help="Blend in meaning. Needs `hashline index`."),
+    ] = False,
+    model_name: Annotated[
+        str | None,
+        typer.Option("--model", help="Embedding model, with --semantic."),
+    ] = None,
 ) -> None:
     """Full-text search, best match first."""
     with _open(ctx) as store:
+        if semantic:
+            _semantic_search(store, query, tag=tag, limit=limit, model_name=model_name)
+            return
         hits = store.search_notes(query, tag=tag, limit=limit)
         if not hits:
             typer.echo("no matches")
@@ -571,6 +587,71 @@ def _format_context(context: Context) -> str:
     tags = ", ".join(context.tags) if context.tags else "(none)"
     citekey = context.citekey or "(none)"
     return f"tags: {tags}  citekey: {citekey}"
+
+
+def _semantic_search(
+    store: Store,
+    query: str,
+    *,
+    tag: str | None,
+    limit: int,
+    model_name: str | None,
+) -> None:
+    """Rank by keyword and by meaning, then fuse the two orders.
+
+    BM25 and cosine similarity are on unrelated scales, so the ranks are
+    combined rather than the scores: reciprocal rank fusion needs no
+    normalization constant to tune, and adding a third ranker later costs
+    nothing.
+    """
+    from hashline.ml import embed
+    from hashline.ml.search import fuse_rankings, rank_by_similarity
+
+    name = model_name if model_name is not None else embed.DEFAULT_MODEL
+    key = embed.embedding_key(name)
+
+    rows = list(store.iter_embeddings(key))
+    if tag is not None:
+        allowed = {note.id for note in store.list_notes(tag=tag, limit=-1)}
+        rows = [row for row in rows if row[0] in allowed]
+    if not rows:
+        typer.echo(f"no notes are indexed for {key}; run `hashline index` first")
+        return
+
+    try:
+        query_vector = embed.embed_texts([query], model=embed.load_model(name))[0]
+    except embed.MlExtraNotInstalled as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+    ids = [note_id for note_id, _ in rows]
+    ranked = rank_by_similarity(
+        query_vector, ids, embed.unpack_matrix([blob for _, blob in rows])
+    )
+    keyword_ids = [
+        hit.note.id for hit in store.search_notes(query, tag=tag, limit=_FUSION_DEPTH)
+    ]
+    fused = fuse_rankings(
+        [keyword_ids, [note_id for note_id, _ in ranked[:_FUSION_DEPTH]]],
+        limit=limit,
+    )
+
+    # Said out loud rather than left as a short result list: a search that
+    # quietly ignores half the library is worse than one that says so.
+    pending = len(store.notes_without_embedding(key))
+    if pending:
+        typer.echo(
+            f"{pending} notes are not indexed yet; run `hashline index`", err=True
+        )
+
+    if not fused:
+        typer.echo("no matches")
+        return
+    for note_id, score in fused:
+        note = store.get_note(note_id)
+        if note is None:  # pragma: no cover - deleted between the two reads
+            continue
+        typer.echo(f"{score:6.4f}  {_format_note(note, store.tags_for_note(note.id))}")
 
 
 def _format_note(note: Note, tag_names: Sequence[str]) -> str:

@@ -14,6 +14,7 @@ from hashline.ml.embed import (
     EMBEDDING_KEY,
     QUERY_PREFIX,
     MlExtraNotInstalled,
+    _SentenceTransformerEmbedder,
     embed_texts,
     is_available,
     load_model,
@@ -56,6 +57,21 @@ class TestEmbeddingKey:
     def test_records_the_prefix_convention(self) -> None:
         assert EMBEDDING_KEY != DEFAULT_MODEL
         assert EMBEDDING_KEY.endswith(QUERY_PREFIX.strip().rstrip(":"))
+
+
+class TestSentenceTransformerAdapter:
+    """The seam that keeps the backend's options out of the protocol."""
+
+    def test_asks_the_backend_for_numpy_and_narrows_to_float32(self) -> None:
+        class FakeSentenceTransformer:
+            def encode(self, texts: list[str], **options: object) -> np.ndarray:
+                assert options == {"convert_to_numpy": True}
+                return np.array([[1.0, 2.0]] * len(texts), dtype=np.float64)
+
+        adapter = _SentenceTransformerEmbedder(FakeSentenceTransformer())
+        result = adapter.encode(["one", "two"])
+        assert result.shape == (2, 2)
+        assert result.dtype == np.float32
 
 
 class TestVectorCodec:
