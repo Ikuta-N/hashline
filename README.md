@@ -140,9 +140,21 @@ migration and no reimport. `hashline.ml.search` holds the ranking maths
 semantic rankings); it is pure numpy, imports no model runtime, and is covered
 by the default test suite.
 
-What is left is the embedding backend. `sentence-transformers` will be an
-optional `ml` extra imported inside functions, so the app keeps running fully
-without it, with only semantic search disabled.
+`hashline.ml.embed` wraps the embedding backend. `sentence-transformers` is
+imported inside functions, so importing the module costs nothing and the app
+runs fully without the extra — `is_available()` reports whether semantic search
+can run, and asking for an embedding without it raises `MlExtraNotInstalled`
+rather than an ImportError. The vector codec is pure numpy and is covered by
+the default suite; only the model-dependent tests are `slow`.
+
+```bash
+uv sync --extra ml   # pulls torch (CPU build) and sentence-transformers
+uv run pytest -m slow
+```
+
+What is left is wiring it into the CLI and the web UI: an indexing pass over
+`notes_without_embedding`, then blending the two rankings with
+`ml.search.fuse_rankings`.
 
 ## License
 
