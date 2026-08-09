@@ -88,9 +88,10 @@ class TestCreateNote:
 
     def test_applies_pinned_context(self, client: TestClient, tmp_path: Path) -> None:
         from hashline.models import Context
+
         with Store.open(tmp_path / "hashline.db") as store:
             store.set_context(Context(tags=("reading",)))
-        
+
         response = client.post("/notes", data={"body": "a note"})
         assert response.status_code == 200
         # The returned HTML should show the 'reading' tag
@@ -131,11 +132,14 @@ class TestNav:
         assert response.status_code == 200
         assert 'href="/" class="current"' in response.text
 
-    @pytest.mark.parametrize("route, expected_href", [
-        ("/bib", 'href="/bib" class="current"'),
-        ("/import", 'href="/import" class="current"'),
-        ("/export", 'href="/export" class="current"'),
-    ])
+    @pytest.mark.parametrize(
+        "route, expected_href",
+        [
+            ("/bib", 'href="/bib" class="current"'),
+            ("/import", 'href="/import" class="current"'),
+            ("/export", 'href="/export" class="current"'),
+        ],
+    )
     def test_stubs_render_and_mark_current(
         self, client: TestClient, route: str, expected_href: str
     ) -> None:
@@ -143,3 +147,106 @@ class TestNav:
         assert response.status_code == 200
         assert expected_href in response.text
         assert "coming" in response.text
+
+
+class TestContext:
+    def test_get_context_strip_no_context(self, client: TestClient) -> None:
+        response = client.get("/context")
+        assert response.status_code == 200
+        assert "context-strip" in response.text
+        assert 'name="tag"' in response.text
+        assert 'name="citekey"' in response.text
+
+    def test_pin_tags(self, client: TestClient) -> None:
+        response = client.post("/context/pin", data={"tag": "research urgent"})
+        assert response.status_code == 200
+        assert "research, urgent" in response.text
+        assert 'name="citekey"' not in response.text
+
+        # Verify it persisted
+        assert "research, urgent" in client.get("/context").text
+
+    def test_pin_invalid_tag(self, client: TestClient) -> None:
+        response = client.post("/context/pin", data={"tag": "invalid@tag"})
+        assert response.status_code == 200
+        assert 'class="error"' in response.text
+
+    def test_read_start(self, client: TestClient, tmp_path: Path) -> None:
+        from hashline.models import BibEntry
+
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        tag="smith2020",
+                        entry_type="article",
+                        title="Test",
+                    )
+                ]
+            )
+
+        response = client.post(
+            "/context/read", data={"citekey": "smith2020", "tag": ""}
+        )
+        assert response.status_code == 200
+        assert "smith2020" in response.text
+        assert "Test" in response.text
+        assert "reading" in response.text
+
+        # Verify it persisted
+        assert "smith2020" in client.get("/context").text
+
+    def test_read_start_custom_tag(self, client: TestClient, tmp_path: Path) -> None:
+        from hashline.models import BibEntry
+
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        tag="smith2020",
+                        entry_type="article",
+                        title="Test",
+                    )
+                ]
+            )
+
+        response = client.post(
+            "/context/read", data={"citekey": "smith2020", "tag": "annotating"}
+        )
+        assert response.status_code == 200
+        assert "annotating" in response.text
+
+    def test_read_unknown_citekey(self, client: TestClient) -> None:
+        response = client.post("/context/read", data={"citekey": "nope", "tag": ""})
+        assert response.status_code == 200
+        assert "no bibliography entry for citekey" in response.text
+
+    def test_read_invalid_tag(self, client: TestClient, tmp_path: Path) -> None:
+        from hashline.models import BibEntry
+
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        tag="smith2020",
+                        entry_type="article",
+                        title="Test",
+                    )
+                ]
+            )
+
+        response = client.post(
+            "/context/read", data={"citekey": "smith2020", "tag": "invalid@tag"}
+        )
+        assert response.status_code == 200
+        assert 'class="error"' in response.text
+
+    def test_clear_context(self, client: TestClient) -> None:
+        client.post("/context/pin", data={"tag": "research"})
+        response = client.post("/context/clear")
+        assert response.status_code == 200
+        assert "research" not in response.text
+        assert 'name="citekey"' in response.text

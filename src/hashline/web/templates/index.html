@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+  {% include "_context.html" %}
+
   <form class="composer"
         hx-post="/notes"
         hx-target="#timeline"

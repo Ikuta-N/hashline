@@ -1,0 +1,37 @@
+<div id="context-strip" style="margin-bottom: 1.25rem; padding: .75rem 1rem; background: var(--card); border: 1px solid var(--line); border-radius: .5rem;">
+  {% if error %}
+    <div class="error" style="margin-bottom: .75rem;">{{ error }}</div>
+  {% endif %}
+  
+  {% if pinned_citekey or pinned_tags %}
+    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+      <div>
+        {% if pinned_citekey %}
+          <div style="margin-bottom: .25rem;">
+            <strong>{{ pinned_citekey }}</strong> {{ pinned_title }}
+          </div>
+        {% endif %}
+        {% if pinned_tags %}
+          <div style="color: var(--muted); font-size: .85rem;">
+            tags: {{ pinned_tags | join(', ') }}
+          </div>
+        {% endif %}
+      </div>
+      <form hx-post="/context/clear" hx-target="#context-strip" hx-swap="outerHTML" style="margin: 0;">
+        <button type="submit" style="padding: .4rem .75rem; font-size: .85rem; background: var(--bg); color: var(--fg); border: 1px solid var(--line);">clear</button>
+      </form>
+    </div>
+  {% else %}
+    <div style="display: flex; gap: 1rem; align-items: center;">
+      <form hx-post="/context/pin" hx-target="#context-strip" hx-swap="outerHTML" style="display: flex; gap: .5rem; flex: 1; margin: 0;">
+        <input type="text" name="tag" placeholder="pin #tags" style="padding: .4rem .75rem; font-size: .85rem;">
+        <button type="submit" style="padding: .4rem .75rem; font-size: .85rem;">pin</button>
+      </form>
+      <form hx-post="/context/read" hx-target="#context-strip" hx-swap="outerHTML" style="display: flex; gap: .5rem; flex: 1; margin: 0;">
+        <input type="text" name="citekey" placeholder="citekey to read" required style="padding: .4rem .75rem; font-size: .85rem;">
+        <input type="text" name="tag" placeholder="tag (default: reading)" style="padding: .4rem .75rem; font-size: .85rem; width: 10rem;">
+        <button type="submit" style="padding: .4rem .75rem; font-size: .85rem;">read</button>
+      </form>
+    </div>
+  {% endif %}
+</div>

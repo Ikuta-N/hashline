@@ -7,15 +7,16 @@ must not be shared across the threads FastAPI runs sync handlers on.
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Annotated, Final
+from typing import Annotated, Any, Final
 
 from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from hashline.models import Note
+from hashline.models import Context, Note
 from hashline.store import Store, default_db_path
+from hashline.tags import normalize_tag
 
 _HERE: Final = Path(__file__).parent
 
@@ -42,17 +43,19 @@ def index(
     tag: str = "",
 ) -> HTMLResponse:
     """The whole page: composer, tag sidebar and timeline."""
+    context_data = {
+        "current_page": "notes",
+        "q": q,
+        "tag": tag,
+        "tags": store.list_tags(limit=30),
+        "notes": _timeline(store, q=q, tag=tag),
+        "total": store.count_notes(),
+    }
+    context_data.update(_context_data(store))
     return templates.TemplateResponse(
         request=request,
         name="index.html",
-        context={
-            "current_page": "notes",
-            "q": q,
-            "tag": tag,
-            "tags": store.list_tags(limit=30),
-            "notes": _timeline(store, q=q, tag=tag),
-            "total": store.count_notes(),
-        },
+        context=context_data,
     )
 
 
@@ -115,6 +118,82 @@ def _timeline(
     else:
         found = store.list_notes(tag=filter_tag, limit=limit)
     return [(note, store.tags_for_note(note.id)) for note in found]
+
+
+def _context_data(store: Store, error: str | None = None) -> dict[str, Any]:
+    context = store.get_context()
+    data = {
+        "pinned_citekey": context.citekey,
+        "pinned_tags": context.tags,
+        "pinned_title": None,
+        "error": error,
+    }
+    if context.citekey:
+        entry = store.get_bib_entry(context.citekey)
+        data["pinned_title"] = entry.title if entry and entry.title else "(no title)"
+    return data
+
+
+@app.get("/context", response_class=HTMLResponse)
+def get_context(request: Request, store: StoreDep) -> HTMLResponse:
+    """The context strip fragment."""
+    return templates.TemplateResponse(
+        request=request, name="_context.html", context=_context_data(store)
+    )
+
+
+@app.post("/context/pin", response_class=HTMLResponse)
+def pin_context(
+    request: Request, store: StoreDep, tag: Annotated[str, Form()] = ""
+) -> HTMLResponse:
+    """Set pinned tags and preserve the citekey."""
+    error = None
+    if tag.strip():
+        try:
+            normalized = [normalize_tag(t) for t in tag.split()]
+            current = store.get_context()
+            store.set_context(Context(tags=tuple(normalized), citekey=current.citekey))
+        except ValueError as exc:
+            error = str(exc)
+    return templates.TemplateResponse(
+        request=request, name="_context.html", context=_context_data(store, error=error)
+    )
+
+
+@app.post("/context/read", response_class=HTMLResponse)
+def read_context(
+    request: Request,
+    store: StoreDep,
+    citekey: Annotated[str, Form()],
+    tag: Annotated[str, Form()] = "",
+) -> HTMLResponse:
+    """Pin a citekey, optionally with a tag."""
+    error = None
+    if store.get_bib_entry(citekey) is None:
+        error = (
+            f"no bibliography entry for citekey {citekey!r}; "
+            "import it first with `hashline bib import`"
+        )
+    else:
+        try:
+            tag_name = tag.strip() or "reading"
+            normalized_tag = normalize_tag(tag_name)
+            store.set_context(Context(tags=(normalized_tag,), citekey=citekey))
+        except ValueError as exc:
+            error = str(exc)
+            
+    return templates.TemplateResponse(
+        request=request, name="_context.html", context=_context_data(store, error=error)
+    )
+
+
+@app.post("/context/clear", response_class=HTMLResponse)
+def clear_context(request: Request, store: StoreDep) -> HTMLResponse:
+    """Unpin everything."""
+    store.clear_context()
+    return templates.TemplateResponse(
+        request=request, name="_context.html", context=_context_data(store)
+    )
 
 
 @app.get("/bib", response_class=HTMLResponse)
