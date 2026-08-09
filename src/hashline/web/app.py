@@ -7,7 +7,7 @@ must not be shared across the threads FastAPI runs sync handlers on.
 """
 
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Final
 
@@ -38,6 +38,31 @@ templates = Jinja2Templates(directory=str(_HERE / "templates"))
 
 app = FastAPI(title="hashline")
 app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
+
+_SAFE_METHODS: Final = {"GET", "HEAD", "OPTIONS"}
+
+
+@app.middleware("http")
+async def reject_cross_origin_writes(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Reject a state-changing request whose Origin does not match this host.
+
+    A cross-origin form POST needs no preflight, so any page left open in a
+    browser could otherwise delete notes or replace the bibliography here.
+    Browsers always attach Origin to a cross-origin POST; curl and every
+    request this app's own UI makes send none, so a request with no Origin
+    at all is let through -- checking every state-changing route here, in
+    one place, beats a check copied into each handler.
+    """
+    origin = request.headers.get("origin")
+    if request.method not in _SAFE_METHODS and origin is not None:
+        request_origin = f"{request.url.scheme}://{request.url.netloc}"
+        if origin != request_origin:
+            return Response(
+                status_code=403, content="cross-origin request rejected"
+            )
+    return await call_next(request)
 
 
 def get_store() -> Iterator[Store]:

@@ -81,7 +81,7 @@ The Web UI implements equivalent functionality to the CLI commands:
 | `hashline bib import` | `POST /bib/import` (also supports browser uploads) |
 | `hashline export` | `GET /export`, `GET /export/download` |
 
-> **Security Note:** The `path` field in both `/import` and `/bib/import` reads files directly from the local filesystem on the machine running the server. Do not expose this web app to a network.
+> **Security Note:** The `path` field in both `/import` and `/bib/import` reads files directly from the local filesystem on the machine running the server. Do not expose this web app to a network. All state-changing routes also reject a POST whose `Origin` header does not match the server's own host, so a form on another site left open in the same browser cannot delete notes or replace the bibliography; a request with no `Origin` header (curl, the CLI) is still allowed through.
 
 ### `import`
 
