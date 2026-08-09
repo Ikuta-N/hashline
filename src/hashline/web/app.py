@@ -402,14 +402,16 @@ def clear_read(request: Request, store: StoreDep) -> HTMLResponse:
 def bib(request: Request, store: StoreDep) -> HTMLResponse:
     """Bibliography management."""
     entries = store.list_bib_entries()
+    context_data = {
+        "current_page": "bib",
+        "total": store.count_notes(),
+        "entries": entries,
+    }
+    context_data.update(_context_data(store))
     return templates.TemplateResponse(
         request=request,
         name="bib.html",
-        context={
-            "current_page": "bib",
-            "total": store.count_notes(),
-            "entries": entries,
-        },
+        context=context_data,
     )
 
 
@@ -420,10 +422,16 @@ def bib_detail(request: Request, citekey: str, store: StoreDep) -> HTMLResponse:
     if entry is None:
         raise HTTPException(status_code=404, detail="Citekey not found")
 
+    context_data = {
+        "current_page": "bib",
+        "total": store.count_notes(),
+        "entry": entry,
+    }
+    context_data.update(_context_data(store))
     return templates.TemplateResponse(
         request=request,
         name="bib_detail.html",
-        context={"current_page": "bib", "total": store.count_notes(), "entry": entry},
+        context=context_data,
     )
 
 

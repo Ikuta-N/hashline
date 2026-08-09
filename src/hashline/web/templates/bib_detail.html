@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Bibliography: {{ entry.citekey }} - hashline{% endblock %}
 {% block content %}
+{% include "_context.html" %}
 <div class="stack">
   <div style="display: flex; justify-content: space-between; align-items: flex-start;">
     <h2>{{ entry.citekey }}</h2>
