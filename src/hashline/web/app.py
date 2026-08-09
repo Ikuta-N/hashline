@@ -135,16 +135,20 @@ def create_note(
         # -- is the user's to see.
         try:
             extra_tags = tuple(tags.split()) if tags.strip() else ()
+            # These messages are read in a browser, so they name what is on the
+            # screen -- a page field, a context strip -- and not CLI flags.
             if no_context:
                 if page:
                     raise ValueError(
-                        "--page requires a pinned citekey; --no-context has none"
+                        "a page needs a pinned work, and this note is being "
+                        "captured without the context"
                     )
                 store.add_note(body, extra_tags=extra_tags, parent_id=parent_id)
             else:
                 if page and store.get_context().citekey is None:
                     raise ValueError(
-                        "--page requires a pinned citekey; see `hashline read start`"
+                        "a page needs a pinned work; start reading one from the "
+                        "context strip above"
                     )
                 store.add_note_with_context(
                     body, page=page or None, extra_tags=extra_tags, parent_id=parent_id
@@ -332,7 +336,7 @@ def read_context(
     if store.get_bib_entry(citekey) is None:
         error = (
             f"no bibliography entry for citekey {citekey!r}; "
-            "import it first with `hashline bib import`"
+            "import one on the Import page first"
         )
     else:
         try:

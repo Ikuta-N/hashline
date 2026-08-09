@@ -221,7 +221,9 @@ class TestCreateNote:
     def test_page_with_no_citekey_is_error(self, client: TestClient) -> None:
         response = client.post("/notes", data={"body": "a note", "page": "10"})
         assert response.status_code == 200
-        assert "requires a pinned citekey" in response.text
+        assert "a page needs a pinned work" in response.text
+        # The reader is looking at a form, not a terminal.
+        assert "--page" not in response.text
 
     def test_no_context_ignores_pinned_context(
         self, client: TestClient, tmp_path: Path
@@ -241,7 +243,8 @@ class TestCreateNote:
             "/notes", data={"body": "a note", "page": "10", "no_context": "on"}
         )
         assert response.status_code == 200
-        assert "--no-context has none" in response.text
+        assert "a page needs a pinned work" in response.text
+        assert "--no-context" not in response.text
 
     def test_extra_tags(self, client: TestClient) -> None:
         response = client.post("/notes", data={"body": "a note", "tags": "web ui"})
