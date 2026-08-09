@@ -18,7 +18,23 @@ from numpy.typing import NDArray
 #: Small, multilingual-tolerant and quick to download. Overridable per call.
 DEFAULT_MODEL: Final = "sentence-transformers/all-MiniLM-L6-v2"
 
+#: In-memory element type. float32 is what sentence-transformers emits, and
+#: 4 bytes per dimension is 1.5 KB for a 384-dim vector. float64 would double
+#: that and change no ranking; float16 would halve it and cost three decimal
+#: digits that numpy widens back before every dot product anyway.
 _DTYPE: Final = np.float32
+
+#: The on-disk element type: the same float32, with its byte order fixed.
+#:
+#: A SQLite file is portable between machines, so byte order has to be part of
+#: the format rather than a property of whoever wrote the row. A natively
+#: packed vector written on x86 and read on a big-endian host comes back as
+#: plausible garbage -- no exception, just silently wrong rankings. Pinning it
+#: costs nothing where the native order already matches.
+_STORAGE_DTYPE: Final = np.dtype("<f4")
+
+#: Bytes per dimension. Named because the dim column is checked against it.
+_ITEMSIZE: Final = _STORAGE_DTYPE.itemsize
 
 
 class MlExtraNotInstalled(RuntimeError):
@@ -69,15 +85,28 @@ def embed_texts(
 
 def pack_vector(vector: NDArray[np.floating]) -> bytes:
     """Serialize one vector for the ``embeddings.vec`` BLOB column."""
-    values = np.asarray(vector, dtype=_DTYPE).reshape(-1)
+    values = np.asarray(vector, dtype=_STORAGE_DTYPE).reshape(-1)
     return values.tobytes()
 
 
-def unpack_vector(blob: bytes) -> NDArray[np.float32]:
-    """Read back a vector written by :func:`pack_vector`."""
-    if len(blob) % _DTYPE().itemsize:
+def unpack_vector(
+    blob: bytes, *, expected_dim: int | None = None
+) -> NDArray[np.float32]:
+    """Read back a vector written by :func:`pack_vector`.
+
+    Pass ``expected_dim`` -- the row's ``embeddings.dim`` -- to have a
+    truncated blob rejected. Without it only the byte count is checked, so a
+    blob that lost a few dimensions reads back as a shorter, entirely
+    plausible vector and every ranking it takes part in is quietly wrong.
+    """
+    if len(blob) % _ITEMSIZE:
         raise ValueError(f"blob of {len(blob)} bytes is not a float32 vector")
-    return np.frombuffer(blob, dtype=_DTYPE).copy()
+    if expected_dim is not None and len(blob) != expected_dim * _ITEMSIZE:
+        raise ValueError(
+            f"blob of {len(blob)} bytes holds {len(blob) // _ITEMSIZE} "
+            f"dimensions, but the row records {expected_dim}"
+        )
+    return np.asarray(np.frombuffer(blob, dtype=_STORAGE_DTYPE), dtype=_DTYPE).copy()
 
 
 def unpack_matrix(blobs: Sequence[bytes]) -> NDArray[np.float32]:

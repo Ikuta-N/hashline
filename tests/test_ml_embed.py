@@ -64,6 +64,36 @@ class TestVectorCodec:
     def test_empty_blob_gives_an_empty_vector(self) -> None:
         assert unpack_vector(b"").shape == (0,)
 
+    def test_the_stored_bytes_are_little_endian(self) -> None:
+        """The format is fixed, not inherited from whoever wrote the row.
+
+        A .db file moves between machines, so a natively packed vector read
+        on a host of the other byte order would come back as plausible
+        garbage -- no exception, only wrong rankings.
+        """
+        # float32 1.0 is 0x3F800000, so little-endian puts 0x3F last.
+        assert pack_vector(np.array([1.0], dtype=np.float32)) == b"\x00\x00\x80\x3f"
+
+    def test_reads_a_blob_written_on_a_machine_of_either_byte_order(self) -> None:
+        vector = np.array([0.5, -1.25, 3.0], dtype=np.float32)
+        written_big_endian = vector.astype(">f4").tobytes()
+        assert not np.array_equal(unpack_vector(written_big_endian), vector), (
+            "the fixture is not actually byte-swapped"
+        )
+        assert np.array_equal(unpack_vector(vector.astype("<f4").tobytes()), vector)
+
+    def test_a_dimension_short_of_the_row_is_refused(self) -> None:
+        """embeddings.dim is the record of how wide the vector should be.
+
+        Without the cross-check a blob that lost dimensions reads back as a
+        shorter, entirely plausible vector, and unpack_matrix would only
+        notice if some other row happened to disagree with it.
+        """
+        packed = pack_vector(np.array([1.0, 2.0, 3.0], dtype=np.float32))
+        assert unpack_vector(packed, expected_dim=3).shape == (3,)
+        with pytest.raises(ValueError, match="the row records 4"):
+            unpack_vector(packed, expected_dim=4)
+
 
 class TestUnpackMatrix:
     def test_stacks_rows_in_order(self) -> None:
