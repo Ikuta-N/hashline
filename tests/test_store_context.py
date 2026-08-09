@@ -109,6 +109,11 @@ class TestAddNoteWithContext:
         assert note.citekey is None
         assert store.tags_for_note(note.id) == ["own"]
 
+    def test_fails_when_pinned_citekey_is_missing_from_bib(self, store: Store) -> None:
+        store.set_context(Context(citekey="smith2020"))
+        with pytest.raises(ValueError, match="no longer in the bibliography"):
+            store.add_note_with_context("thinking about this")
+
 
 class TestAddNoteIgnoresContext:
     def test_add_note_never_applies_a_pinned_context(self, store: Store) -> None:

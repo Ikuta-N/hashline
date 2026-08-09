@@ -58,6 +58,25 @@ class TestAdd:
         )
         assert result.exit_code != 0
 
+    def test_add_fails_cleanly_when_pinned_work_is_removed(
+        self, db: Path, tmp_path: Path
+    ) -> None:
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020")
+        
+        # Replace bibliography with an empty one
+        empty_bib = tmp_path / "empty.bib"
+        empty_bib.write_text("", encoding="utf-8")
+        runner.invoke(
+            app, ["--db", str(db), "bib", "import", str(empty_bib), "--replace"]
+        )
+        
+        # Adding a note should now fail with a nice error
+        result = runner.invoke(app, ["--db", str(db), "add", "a note"])
+        assert result.exit_code != 0
+        assert "no longer in the bibliography" in result.output
+        assert "Traceback" not in result.output
+
 
 class TestList:
     def test_newest_first(self, db: Path) -> None:

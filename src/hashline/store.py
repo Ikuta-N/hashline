@@ -775,6 +775,11 @@ class Store:
             bib = self.get_bib_entry(context.citekey)
             if bib is not None:
                 tags.append(bib.tag)
+            else:
+                raise ValueError(
+                    f"the pinned work {context.citekey!r} is no longer in "
+                    "the bibliography; run `hashline read stop` or re-import it"
+                )
 
         return self.add_note(
             body,
