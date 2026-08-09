@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
@@ -280,6 +280,53 @@ class Store:
             params = (limit,)
         rows = self._conn.execute(sql, params).fetchall()
         return [TagCount(name=row["name"], count=row["count"]) for row in rows]
+
+    # --- embeddings (semantic search) ------------------------------------
+
+    def upsert_embedding(
+        self,
+        note_id: int,
+        *,
+        model: str,
+        vector: bytes,
+        dim: int,
+        updated_at: datetime | None = None,
+    ) -> None:
+        """Store or replace one note's vector for one model."""
+        stamp = _to_text(updated_at if updated_at is not None else _utc_now())
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO embeddings (note_id, model, dim, vec, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(note_id, model) DO UPDATE SET "
+                "dim = excluded.dim, vec = excluded.vec, "
+                "updated_at = excluded.updated_at",
+                (note_id, model, dim, vector, stamp),
+            )
+
+    def notes_without_embedding(
+        self, model: str, *, limit: int | None = None
+    ) -> list[Note]:
+        """Return notes this model has not embedded yet, oldest id first."""
+        sql = (
+            "SELECT n.id, n.body, n.created_at, n.source FROM notes n "
+            "LEFT JOIN embeddings e ON e.note_id = n.id AND e.model = ? "
+            "WHERE e.note_id IS NULL ORDER BY n.id"
+        )
+        params: list[object] = [model]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [_to_note(row) for row in self._conn.execute(sql, params).fetchall()]
+
+    def iter_embeddings(self, model: str) -> Iterator[tuple[int, bytes]]:
+        """Yield ``(note_id, vector)`` for one model, ordered by note id."""
+        cursor = self._conn.execute(
+            "SELECT note_id, vec FROM embeddings WHERE model = ? ORDER BY note_id",
+            (model,),
+        )
+        for row in cursor:
+            yield row["note_id"], row["vec"]
 
     def search_notes(
         self, query: str, *, tag: str | None = None, limit: int = 50
