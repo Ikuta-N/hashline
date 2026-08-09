@@ -394,11 +394,22 @@ def pin(
     bare command is never a silent no-op. --show does exactly the same
     thing; it exists so that intent reads clearly in scripts and history.
     """
-    with _open(ctx) as store:
-        if clear:
+    if show:
+        if tag or clear:
+            raise typer.BadParameter("cannot combine --show with tags or --clear")
+        with _open(ctx) as store:
+            typer.echo(_format_context(store.get_context()))
+        return
+
+    if clear:
+        if tag:
+            raise typer.BadParameter("cannot combine --clear with tags")
+        with _open(ctx) as store:
             store.clear_context()
-            typer.echo("context cleared")
-            return
+        typer.echo("context cleared")
+        return
+
+    with _open(ctx) as store:
         if tag:
             try:
                 normalized = [normalize_tag(name) for name in tag]

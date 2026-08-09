@@ -287,6 +287,21 @@ class TestPin:
         result = runner.invoke(app, ["--db", str(db), "pin", "two words"])
         assert result.exit_code != 0
 
+    def test_show_conflicts_with_clear(self, db: Path) -> None:
+        result = runner.invoke(app, ["--db", str(db), "pin", "--show", "--clear"])
+        assert result.exit_code != 0
+        assert "cannot combine" in result.output
+
+    def test_show_conflicts_with_tags(self, db: Path) -> None:
+        result = runner.invoke(app, ["--db", str(db), "pin", "tag", "--show"])
+        assert result.exit_code != 0
+        assert "cannot combine" in result.output
+
+    def test_clear_conflicts_with_tags(self, db: Path) -> None:
+        result = runner.invoke(app, ["--db", str(db), "pin", "tag", "--clear"])
+        assert result.exit_code != 0
+        assert "cannot combine" in result.output
+
 
 class TestRead:
     def test_status_reports_nothing_pinned(self, db: Path) -> None:
