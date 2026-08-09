@@ -61,6 +61,28 @@ Capture, tag filtering and search-as-you-type over the same database the CLI
 uses; it honours `$HASHLINE_DB`. HTMX is vendored under
 `src/hashline/web/static/`, so the page needs no CDN and works offline.
 
+### Feature Parity
+
+The Web UI implements equivalent functionality to the CLI commands:
+
+| CLI command | Web UI route |
+|---|---|
+| `hashline list` | `GET /` |
+| `hashline add` | `POST /notes` |
+| `hashline rm` | `POST /notes/{id}/delete` |
+| `hashline reply` | `POST /notes` (with parent_id) |
+| `hashline thread` | `GET /` (with root filter) |
+| `hashline search` | `GET /` (with q) |
+| `hashline pin` | `POST /context/pin`, `POST /context/clear_tags` |
+| `hashline read` | `POST /context/read`, `POST /context/clear_read` |
+| `hashline bib list` | `GET /bib` |
+| `hashline bib show` | `GET /bib/{citekey}` |
+| `hashline import` | `POST /import` (also supports browser uploads) |
+| `hashline bib import` | `POST /bib/import` (also supports browser uploads) |
+| `hashline export` | `GET /export`, `GET /export/download` |
+
+> **Security Note:** The `path` field in both `/import` and `/bib/import` reads files directly from the local filesystem on the machine running the server. Do not expose this web app to a network.
+
 ### `import`
 
 ```
