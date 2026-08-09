@@ -620,18 +620,25 @@ def export(
     store: StoreDep,
     tag: str = "",
     citekey: str = "",
-    root: int | None = None,
+    root: str = "",
 ) -> HTMLResponse:
     """Preview exports."""
     error = None
     markdown = ""
-
-    if root is not None and (tag or citekey):
-        error = "--root cannot be combined with --tag or --citekey"
-    else:
+    root_id = None
+    
+    if root.strip():
         try:
-            if root is not None:
-                notes = store.thread(root)
+            root_id = int(root.strip())
+        except ValueError:
+            error = "Root note ID must be a number"
+
+    if not error and root_id is not None and (tag or citekey):
+        error = "Root note ID cannot be combined with Tag or Citekey"
+    elif not error:
+        try:
+            if root_id is not None:
+                notes = store.thread(root_id)
             else:
                 notes = store.list_notes(
                     tag=tag if tag else None,
@@ -652,40 +659,67 @@ def export(
             "total": store.count_notes(),
             "tag": tag,
             "citekey": citekey,
-            "root": root if root is not None else "",
+            "root": root,
             "markdown": markdown,
             "error": error,
         },
     )
 
 
+import re
+
 @app.get("/export/download")
 def export_download(
+    request: Request,
     store: StoreDep,
     tag: str = "",
     citekey: str = "",
-    root: int | None = None,
+    root: str = "",
 ) -> Response:
     """Download exported notes as Markdown."""
-    if root is not None and (tag or citekey):
-        raise HTTPException(
-            status_code=400, detail="--root cannot be combined with --tag or --citekey"
+    error = None
+    root_id = None
+    
+    if root.strip():
+        try:
+            root_id = int(root.strip())
+        except ValueError:
+            error = "Root note ID must be a number"
+
+    if not error and root_id is not None and (tag or citekey):
+        error = "Root note ID cannot be combined with Tag or Citekey"
+
+    if error:
+        return templates.TemplateResponse(
+            request=request,
+            name="export.html",
+            context={
+                "current_page": "export",
+                "total": store.count_notes(),
+                "tag": tag,
+                "citekey": citekey,
+                "root": root,
+                "error": error,
+            },
         )
 
     try:
-        if root is not None:
-            notes = store.thread(root)
-            filename = f"thread_{root}.md"
+        def sanitize(s: str) -> str:
+            return re.sub(r'[^\w\-]', '_', s)
+
+        if root_id is not None:
+            notes = store.thread(root_id)
+            filename = f"thread_{root_id}.md"
         else:
             notes = store.list_notes(
                 tag=tag if tag else None, citekey=citekey if citekey else None, limit=-1
             )
             if tag and citekey:
-                filename = f"export_{tag}_{citekey}.md"
+                filename = f"export_{sanitize(tag)}_{sanitize(citekey)}.md"
             elif tag:
-                filename = f"export_{tag}.md"
+                filename = f"export_{sanitize(tag)}.md"
             elif citekey:
-                filename = f"export_{citekey}.md"
+                filename = f"export_{sanitize(citekey)}.md"
             else:
                 filename = "export_all.md"
 
