@@ -1,0 +1,13 @@
+<form class="composer reply-form"
+      hx-post="/notes"
+      hx-target="#timeline"
+      hx-swap="outerHTML">
+  <input type="hidden" name="parent_id" value="{{ note_id }}">
+  <input type="text" name="body" placeholder="reply..." autofocus>
+  <input type="text" name="tags" placeholder="tags">
+  {% if pinned_citekey %}
+    <input type="text" name="page" placeholder="page">
+  {% endif %}
+  <label><input type="checkbox" name="no_context"> no context</label>
+  <button type="submit">reply</button>
+</form>

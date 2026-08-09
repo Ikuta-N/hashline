@@ -69,6 +69,35 @@ class TestTimelineFragment:
     def test_reports_no_matches(self, seeded: TestClient) -> None:
         assert "no matches" in seeded.get("/notes", params={"q": "zzzzz"}).text
 
+    def test_replies_render_nested_under_their_parent(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("parent")
+            store.add_note("reply", parent_id=1)
+        body = client.get("/notes").text
+        # The reply should be indented
+        assert 'style="margin-left: 20px"' in body
+        assert "reply" in body
+
+    def test_search_results_are_flat(self, client: TestClient, tmp_path: Path) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("parent")
+            store.add_note("reply to parent", parent_id=1)
+        body = client.get("/notes", params={"q": "parent"}).text
+        assert 'style="margin-left: 0px"' in body
+        assert 'style="margin-left: 20px"' not in body
+
+    def test_orphaned_reply_appears_as_root_when_filtering(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("parent")
+            store.add_note("reply #tagged", parent_id=1)
+        body = client.get("/notes", params={"tag": "tagged"}).text
+        assert 'style="margin-left: 0px"' in body
+        assert "reply" in body
+
 
 class TestCreateNote:
     def test_stores_the_note_and_returns_the_timeline(self, client: TestClient) -> None:
@@ -164,6 +193,62 @@ class TestReply:
         response = seeded.post("/notes", data={"body": "a reply", "parent_id": "999"})
         assert response.status_code == 200
         assert "does not exist" in response.text
+
+
+class TestThreadView:
+    def test_renders_the_subtree(self, client: TestClient, tmp_path: Path) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("root")
+            store.add_note("child 1", parent_id=1)
+            store.add_note("grandchild", parent_id=2)
+            store.add_note("child 2", parent_id=1)
+            store.add_note("unrelated")
+            
+        response = client.get("/notes/1/thread")
+        assert response.status_code == 200
+        body = response.text
+        assert "root" in body
+        assert "grandchild" in body
+        assert "unrelated" not in body
+
+    def test_unknown_id_is_404(self, client: TestClient) -> None:
+        response = client.get("/notes/999/thread")
+        assert response.status_code == 404
+
+
+class TestDeleteNote:
+    def test_deleting_leaf_works_and_reports_count(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("to delete")
+        response = client.post("/notes/1/delete")
+        assert response.status_code == 200
+        assert "deleted 1 note" in response.text
+        assert "to delete" not in response.text
+
+    def test_deleting_parent_answers_200_and_offers_recursive(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("parent")
+            store.add_note("child", parent_id=1)
+        response = client.post("/notes/1/delete")
+        assert response.status_code == 200
+        assert "note 1 has 1 replies" in response.text
+        assert "parent" in response.text # keeps the note
+        assert 'name="recursive" value="true"' in response.text # offers recursive
+
+    def test_recursive_delete_removes_whole_thread(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("parent")
+            store.add_note("child", parent_id=1)
+        response = client.post("/notes/1/delete", data={"recursive": "true"})
+        assert response.status_code == 200
+        assert "deleted 2 notes" in response.text
+        assert "parent" not in response.text
 
 
 class TestStatic:

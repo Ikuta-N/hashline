@@ -1,15 +1,19 @@
 <section id="timeline">
-  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
-  {% for note, tag_names in notes %}
-    <article class="note" id="note-{{ note.id }}">
-      <p>{{ note.body }}</p>
-      <div class="meta">
-        {{ note.created_at.strftime('%Y-%m-%d %H:%M') }}
-        {% if tag_names %} · {{ tag_names | join(', ') }}{% endif %}
-        {% if note.citekey %} · {{ note.citekey }}{% if note.page %} p.{{ note.page }}{% endif %}{% endif %}
-        · <button hx-get="/notes/{{ note.id }}/reply" hx-swap="afterend">reply</button>
-      </div>
-    </article>
+  {% if error %}
+    <p class="error" role="alert">
+      {{ error }}
+      {% if delete_retry_id %}
+        <form hx-post="/notes/{{ delete_retry_id }}/delete" hx-target="#timeline" hx-swap="outerHTML" style="display:inline;">
+          <input type="hidden" name="recursive" value="true">
+          <input type="hidden" name="q" value="{{ q }}">
+          <input type="hidden" name="tag" value="{{ tag }}">
+          <button type="submit">delete recursively</button>
+        </form>
+      {% endif %}
+    </p>
+  {% endif %}
+  {% for note, tag_names, indent in notes %}
+    {% include "_note.html" %}
   {% else %}
     <p class="empty">{% if q %}no matches{% else %}no notes yet{% endif %}</p>
   {% endfor %}

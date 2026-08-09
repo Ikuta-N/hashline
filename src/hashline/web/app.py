@@ -5,17 +5,18 @@ result. A fresh connection is opened per request, because a sqlite3 connection
 must not be shared across the threads FastAPI runs sync handlers on.
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Final
 
-from fastapi import Depends, FastAPI, Form, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from hashline.models import DEFAULT_READING_TAG, Context, Note
-from hashline.store import Store, default_db_path
+from hashline.outline import OutlineNode, build_tree
+from hashline.store import NoteHasReplies, Store, default_db_path
 
 _HERE: Final = Path(__file__).parent
 
@@ -139,16 +140,93 @@ def reply_fragment(
     )
 
 
+@app.get("/notes/{note_id}/thread", response_class=HTMLResponse)
+def thread(
+    request: Request,
+    store: StoreDep,
+    note_id: int,
+) -> HTMLResponse:
+    try:
+        found = store.thread(note_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Note not found") from exc
+        
+    def flatten(
+        roots: Sequence[OutlineNode], depth: int = 0
+    ) -> Iterator[tuple[Note, list[str], int]]:
+        for root in roots:
+            yield root.note, store.tags_for_note(root.note.id), depth
+            yield from flatten(root.children, depth + 1)
+            
+    items = list(flatten(build_tree(found)))
+    
+    return templates.TemplateResponse(
+        request=request,
+        name="_timeline.html",
+        context={
+            "notes": items,
+            "q": "",
+            "tag": "",
+        },
+    )
+
+@app.post("/notes/{note_id}/delete", response_class=HTMLResponse)
+def delete_note(
+    request: Request,
+    store: StoreDep,
+    note_id: int,
+    recursive: Annotated[bool, Form()] = False,
+    tag: Annotated[str, Form()] = "",
+    q: Annotated[str, Form()] = "",
+) -> HTMLResponse:
+    error: str | None = None
+    delete_retry_id: int | None = None
+    try:
+        count = store.delete_note(note_id, recursive=recursive)
+        if count == 0:
+            error = f"note {note_id} not found"
+        else:
+            suffix = "s" if count != 1 else ""
+            error = f"deleted {count} note{suffix}"
+    except NoteHasReplies as exc:
+        error = (
+            f"note {exc.note_id} has {exc.reply_count} replies; "
+            "use --recursive to delete the whole thread"
+        )
+        delete_retry_id = note_id
+
+    return templates.TemplateResponse(
+        request=request,
+        name="_timeline.html",
+        context={
+            "notes": _timeline(store, q=q, tag=tag),
+            "q": q,
+            "tag": tag,
+            "error": error,
+            "delete_retry_id": delete_retry_id,
+        },
+    )
+
 def _timeline(
     store: Store, *, q: str, tag: str, limit: int = 50
-) -> list[tuple[Note, list[str]]]:
-    """Notes plus their tags, either searched or listed."""
+) -> list[tuple[Note, list[str], int]]:
+    """Notes plus their tags, either searched (flat) or listed (nested)."""
     filter_tag = tag or None
     if q.strip():
+        # Ranked list and tree are different things -- render search results FLAT.
         found = [hit.note for hit in store.search_notes(q, tag=filter_tag, limit=limit)]
-    else:
-        found = store.list_notes(tag=filter_tag, limit=limit)
-    return [(note, store.tags_for_note(note.id)) for note in found]
+        return [(note, store.tags_for_note(note.id), 0) for note in found]
+        
+    found = store.list_notes(tag=filter_tag, limit=limit)
+    
+    def flatten(
+        roots: Sequence[OutlineNode], depth: int = 0
+    ) -> Iterator[tuple[Note, list[str], int]]:
+        for root in roots:
+            yield root.note, store.tags_for_note(root.note.id), depth
+            yield from flatten(root.children, depth + 1)
+            
+    return list(flatten(build_tree(found)))
 
 
 def _context_data(store: Store, error: str | None = None) -> dict[str, Any]:
