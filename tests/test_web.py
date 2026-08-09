@@ -2276,7 +2276,20 @@ class TestFormContracts:
             if submission is None:
                 continue
             fields: dict[str, str] = {}
-            for control in re.findall(r"<(?:input|textarea|select)\b[^>]*>", block):
+            # Selects first: their own opening tag carries no value="...", so
+            # the input pattern below would submit the placeholder "x" for
+            # them. That is not what a browser sends, and it hides exactly the
+            # mismatch this class exists to catch -- a route typed `int` would
+            # 422 on a select it can never actually receive a word from.
+            for select in re.findall(r"<select\b[^>]*>.*?</select>", block, re.DOTALL):
+                name = re.search(r'name="([^"]+)"', select)
+                if name is None:
+                    continue
+                chosen = re.search(r'<option value="([^"]*)"[^>]*\bselected', select)
+                first = re.search(r'<option value="([^"]*)"', select)
+                picked = chosen or first
+                fields[name.group(1)] = picked.group(1) if picked else ""
+            for control in re.findall(r"<(?:input|textarea)\b[^>]*>", block):
                 name = re.search(r'name="([^"]+)"', control)
                 if name is None:
                     continue
