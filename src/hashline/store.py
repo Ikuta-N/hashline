@@ -13,7 +13,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Final
 
-from hashline.models import Note, NoteDraft
+from hashline.models import Note, NoteDraft, TagCount
 from hashline.tags import extract_tags, normalize_tag
 
 SCHEMA_VERSION: Final = 1
@@ -33,6 +33,18 @@ def _to_text(value: datetime) -> str:
     """
     aware = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
     return aware.astimezone(UTC).isoformat(timespec="microseconds")
+
+
+def _filter_tag(tag: str) -> str | None:
+    """Normalize a tag used as a read filter, or ``None`` if it cannot be one.
+
+    Read paths stay lenient: a tag no note could ever carry simply matches
+    nothing, which saves every caller from guarding the query.
+    """
+    try:
+        return normalize_tag(tag)
+    except ValueError:
+        return None
 
 
 def _to_note(row: sqlite3.Row) -> Note:
@@ -177,11 +189,67 @@ class Store:
         ).fetchone()
         return _to_note(row) if row is not None else None
 
-    def list_notes(self, *, limit: int = 50, offset: int = 0) -> list[Note]:
-        """Return the timeline, newest first."""
+    def list_notes(
+        self, *, tag: str | None = None, limit: int = 50, offset: int = 0
+    ) -> list[Note]:
+        """Return the timeline, newest first, optionally narrowed to one tag."""
+        if tag is None:
+            rows = self._conn.execute(
+                "SELECT id, body, created_at, source FROM notes "
+                "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+            return [_to_note(row) for row in rows]
+
+        name = _filter_tag(tag)
+        if name is None:
+            return []
         rows = self._conn.execute(
-            "SELECT id, body, created_at, source FROM notes "
-            "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
-            (limit, offset),
+            "SELECT n.id, n.body, n.created_at, n.source FROM notes n "
+            "JOIN note_tags nt ON nt.note_id = n.id "
+            "JOIN tags t ON t.id = nt.tag_id "
+            "WHERE t.name = ? "
+            "ORDER BY n.created_at DESC, n.id DESC LIMIT ? OFFSET ?",
+            (name, limit, offset),
         ).fetchall()
         return [_to_note(row) for row in rows]
+
+    def count_notes(self, *, tag: str | None = None) -> int:
+        """Count notes, optionally narrowed to one tag."""
+        if tag is None:
+            (count,) = self._conn.execute("SELECT count(*) FROM notes").fetchone()
+            return int(count)
+
+        name = _filter_tag(tag)
+        if name is None:
+            return 0
+        (count,) = self._conn.execute(
+            "SELECT count(*) FROM note_tags nt "
+            "JOIN tags t ON t.id = nt.tag_id WHERE t.name = ?",
+            (name,),
+        ).fetchone()
+        return int(count)
+
+    def list_tags(self, *, limit: int | None = None) -> list[TagCount]:
+        """Return tags that are in use, most used first, ties broken by name."""
+        sql = (
+            "SELECT t.name AS name, count(nt.note_id) AS count FROM tags t "
+            "JOIN note_tags nt ON nt.tag_id = t.id "
+            "GROUP BY t.id ORDER BY count DESC, t.name ASC"
+        )
+        params: tuple[int, ...] = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (limit,)
+        rows = self._conn.execute(sql, params).fetchall()
+        return [TagCount(name=row["name"], count=row["count"]) for row in rows]
+
+    def tags_for_note(self, note_id: int) -> list[str]:
+        """Return the tags linked to one note, in alphabetical order."""
+        rows = self._conn.execute(
+            "SELECT t.name FROM tags t "
+            "JOIN note_tags nt ON nt.tag_id = t.id "
+            "WHERE nt.note_id = ? ORDER BY t.name",
+            (note_id,),
+        ).fetchall()
+        return [row["name"] for row in rows]
