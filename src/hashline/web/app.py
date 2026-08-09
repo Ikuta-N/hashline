@@ -485,10 +485,11 @@ def import_notes(
 
     tag_list = tags.split() if tags else []
     try:
-        valid_mode = mode if mode in {"line", "heading", "outline"} else "line"
+        if mode not in {"line", "heading", "outline"}:
+            raise ValueError(f"unknown import mode: {mode}")
         drafts = parse_documents(
             documents,
-            mode=valid_mode,  # type: ignore[arg-type]
+            mode=mode,  # type: ignore[arg-type]
             common_tags=tag_list,
         )
     except ValueError as exc:
