@@ -1,5 +1,48 @@
 {% extends "base.html" %}
 {% block title %}Export - hashline{% endblock %}
 {% block content %}
-<p class="empty">Export features coming in part 3.</p>
+<div class="stack">
+  <h2>Export Notes</h2>
+  <div class="card" style="padding: 1.5rem; background: var(--card); border: 1px solid var(--line); border-radius: .5rem; margin-bottom: 2rem;">
+    <form hx-get="/export" hx-target="#preview-container" hx-select="#preview-container" hx-swap="outerHTML" hx-trigger="input from:input delay:300ms, change from:input, submit" class="stack" style="margin-bottom: 2rem;">
+      <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+        <div>
+          <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Tag</label>
+          <input type="text" name="tag" value="{{ tag }}" placeholder="tag" style="padding: .4rem; width: 120px;">
+        </div>
+        <div>
+          <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Citekey</label>
+          <input type="text" name="citekey" value="{{ citekey }}" placeholder="citekey" style="padding: .4rem; width: 120px;">
+        </div>
+        <div>
+          <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Thread Root ID</label>
+          <input type="number" name="root" value="{{ root }}" placeholder="id" style="padding: .4rem; width: 120px;">
+        </div>
+      </div>
+      <noscript>
+        <button type="submit" style="padding: .4rem 1rem;">Preview</button>
+      </noscript>
+    </form>
+    
+    <div id="preview-container">
+      {% if error %}
+        <div class="error" style="margin-bottom: 1rem;">{{ error }}</div>
+      {% else %}
+        <form method="get" action="/export/download" style="margin-bottom: 1rem;">
+          <input type="hidden" name="tag" value="{{ tag }}">
+          <input type="hidden" name="citekey" value="{{ citekey }}">
+          <input type="hidden" name="root" value="{{ root }}">
+          <button type="submit" style="padding: .4rem 1rem;">Download .md</button>
+        </form>
+        
+        {% if not markdown %}
+          <p class="empty" style="color: var(--muted);">No notes match these filters.</p>
+        {% else %}
+          <h3>Preview</h3>
+          <pre style="background: var(--bg); padding: 1rem; border-radius: .5rem; border: 1px solid var(--line); overflow-x: auto; font-family: monospace;"><code>{{ markdown }}</code></pre>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+</div>
 {% endblock %}

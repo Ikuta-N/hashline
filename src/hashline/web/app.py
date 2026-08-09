@@ -9,7 +9,16 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Final
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -18,7 +27,7 @@ from hashline.bib import parse_bibtex
 from hashline.files import decode_uploads, read_documents
 from hashline.importer import parse_documents
 from hashline.models import DEFAULT_READING_TAG, Context, Note
-from hashline.outline import OutlineNode, build_tree
+from hashline.outline import OutlineNode, build_tree, render_markdown
 from hashline.store import NoteHasReplies, Store, default_db_path
 
 _HERE: Final = Path(__file__).parent
@@ -568,10 +577,87 @@ def bib_import(
 
 
 @app.get("/export", response_class=HTMLResponse)
-def export(request: Request, store: StoreDep) -> HTMLResponse:
-    """Export notes (stub)."""
+def export(
+    request: Request,
+    store: StoreDep,
+    tag: str = "",
+    citekey: str = "",
+    root: int | None = None,
+) -> HTMLResponse:
+    """Preview exports."""
+    error = None
+    markdown = ""
+
+    if root is not None and (tag or citekey):
+        error = "--root cannot be combined with --tag or --citekey"
+    else:
+        try:
+            if root is not None:
+                notes = store.thread(root)
+            else:
+                notes = store.list_notes(
+                    tag=tag if tag else None,
+                    citekey=citekey if citekey else None,
+                    limit=-1,
+                )
+
+            roots = build_tree(notes)
+            markdown = render_markdown(roots)
+        except ValueError as exc:
+            error = str(exc)
+
     return templates.TemplateResponse(
         request=request,
         name="export.html",
-        context={"current_page": "export", "total": store.count_notes()},
+        context={
+            "current_page": "export",
+            "total": store.count_notes(),
+            "tag": tag,
+            "citekey": citekey,
+            "root": root if root is not None else "",
+            "markdown": markdown,
+            "error": error,
+        },
+    )
+
+
+@app.get("/export/download")
+def export_download(
+    store: StoreDep,
+    tag: str = "",
+    citekey: str = "",
+    root: int | None = None,
+) -> Response:
+    """Download exported notes as Markdown."""
+    if root is not None and (tag or citekey):
+        raise HTTPException(
+            status_code=400, detail="--root cannot be combined with --tag or --citekey"
+        )
+
+    try:
+        if root is not None:
+            notes = store.thread(root)
+            filename = f"thread_{root}.md"
+        else:
+            notes = store.list_notes(
+                tag=tag if tag else None, citekey=citekey if citekey else None, limit=-1
+            )
+            if tag and citekey:
+                filename = f"export_{tag}_{citekey}.md"
+            elif tag:
+                filename = f"export_{tag}.md"
+            elif citekey:
+                filename = f"export_{citekey}.md"
+            else:
+                filename = "export_all.md"
+
+        roots = build_tree(notes)
+        markdown = render_markdown(roots)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return Response(
+        content=markdown,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

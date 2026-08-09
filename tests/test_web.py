@@ -530,3 +530,106 @@ class TestImport:
         response = client.post("/bib/import", data={"path": "/does/not/exist"})
         assert response.status_code == 200
         assert "no such file: /does/not/exist" in response.text
+
+    def test_import_notes_upload(self, client: TestClient) -> None:
+        files = {"files": ("notes.txt", b"a note\n")}
+        response = client.post("/import", files=files)
+        assert response.status_code == 200
+        assert "imported 1 notes from 1 files" in response.text
+
+    def test_import_notes_dry_run(self, client: TestClient) -> None:
+        files = {"files": ("notes.txt", b"a note\n")}
+        response = client.post("/import", data={"dry_run": "true"}, files=files)
+        assert response.status_code == 200
+        assert "would import 1 notes from 1 files" in response.text
+
+    def test_import_notes_empty(self, client: TestClient) -> None:
+        response = client.post("/import", data={})
+        assert response.status_code == 200
+        assert "Please provide a path or upload files" in response.text
+
+    def test_import_notes_invalid_mode(self, client: TestClient) -> None:
+        files = {"files": ("notes.txt", b"a note\n")}
+        response = client.post("/import", data={"mode": "invalid"}, files=files)
+        assert response.status_code == 200
+        # fallback to line
+        assert "imported 1 notes" in response.text
+
+    def test_import_bib_upload(self, client: TestClient) -> None:
+        files = {"file": ("library.bib", b"@article{smith2020, title={A title}}")}
+        response = client.post("/bib/import", files=files)
+        assert response.status_code == 200
+        assert "imported 1 entries" in response.text
+
+    def test_import_bib_upload_replace(self, client: TestClient) -> None:
+        files = {"file": ("library.bib", b"@article{smith2020, title={A title}}")}
+        response = client.post("/bib/import", data={"replace": "true"}, files=files)
+        assert response.status_code == 200
+        assert "imported 1 entries" in response.text
+
+    def test_import_bib_empty(self, client: TestClient) -> None:
+        response = client.post("/bib/import", data={})
+        assert response.status_code == 200
+        assert "Please provide a path or upload a .bib file" in response.text
+
+    def test_import_bib_parse_error(self, client: TestClient) -> None:
+        files = {"file": ("library.bib", b"invalid bibtex")}
+        response = client.post("/bib/import", files=files)
+        assert response.status_code == 200
+        assert "Parsed to nothing" in response.text
+
+    def test_import_bib_decode_error(self, client: TestClient) -> None:
+        files = {"file": ("library.bib", b"\xff\xfe")}
+        response = client.post("/bib/import", files=files)
+        assert response.status_code == 200
+        assert "could not decode" in response.text
+
+
+class TestExport:
+    def test_export_preview_empty(self, client: TestClient) -> None:
+        response = client.get("/export")
+        assert response.status_code == 200
+        assert "No notes match these filters" in response.text
+
+    def test_export_preview_with_notes(self, seeded: TestClient) -> None:
+        response = seeded.get("/export", params={"tag": "sqlite"})
+        assert response.status_code == 200
+        assert "bm25" in response.text
+        assert "無関係" not in response.text
+        assert "Download .md" in response.text
+
+    def test_export_preview_root_conflict(self, client: TestClient) -> None:
+        response = client.get("/export", params={"root": 1, "tag": "test"})
+        assert response.status_code == 200
+        assert "--root cannot be combined with --tag or --citekey" in response.text
+
+    def test_export_download_success(self, seeded: TestClient) -> None:
+        response = seeded.get("/export/download", params={"tag": "sqlite"})
+        assert response.status_code == 200
+        assert response.headers["Content-Disposition"] == (
+            'attachment; filename="export_sqlite.md"'
+        )
+        assert "bm25" in response.text
+
+    def test_export_download_root_conflict(self, client: TestClient) -> None:
+        response = client.get("/export/download", params={"root": 1, "tag": "test"})
+        assert response.status_code == 400
+        assert "--root cannot be combined" in response.text
+
+    def test_export_download_thread(self, seeded: TestClient, tmp_path: Path) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            note_id = store.add_note("parent")
+            store.add_note("child", parent_id=note_id)
+        response = seeded.get("/export/download", params={"root": note_id})
+        assert response.status_code == 200
+        assert response.headers["Content-Disposition"] == (
+            f'attachment; filename="thread_{note_id}.md"'
+        )
+        assert "parent" in response.text
+        assert "child" in response.text
+
+    def test_export_download_citekey_and_tag(self, client: TestClient) -> None:
+        response = client.get("/export/download", params={"tag": "t", "citekey": "c"})
+        assert response.headers["Content-Disposition"] == (
+            'attachment; filename="export_t_c.md"'
+        )
