@@ -344,7 +344,6 @@ class TestNav:
     @pytest.mark.parametrize(
         "route, expected_href",
         [
-            ("/bib", 'href="/bib" class="current"'),
             ("/import", 'href="/import" class="current"'),
             ("/export", 'href="/export" class="current"'),
         ],
@@ -459,3 +458,51 @@ class TestContext:
         assert response.status_code == 200
         assert "research" not in response.text
         assert 'name="citekey"' in response.text
+
+class TestBib:
+    def test_bib_list_empty(self, client: TestClient) -> None:
+        response = client.get("/bib")
+        assert response.status_code == 200
+        assert "Library is empty" in response.text
+        assert 'href="/import"' in response.text
+
+    def test_bib_list_with_entries(self, client: TestClient, tmp_path: Path) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries([
+                BibEntry(
+                    citekey="smith2020",
+                    entry_type="article",
+                    title="A title",
+                    author="Smith",
+                    year="2020",
+                    raw="...",
+                    tag="smith2020",
+                )
+            ])
+        response = client.get("/bib")
+        assert response.status_code == 200
+        assert "smith2020" in response.text
+        assert "A title" in response.text
+        assert "Smith" in response.text
+
+    def test_bib_detail_found(self, client: TestClient, tmp_path: Path) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries([
+                BibEntry(
+                    citekey="smith2020",
+                    entry_type="article",
+                    title="A title",
+                    author="Smith",
+                    year="2020",
+                    raw="RAW_BIBTEX_CONTENT",
+                    tag="smith2020",
+                )
+            ])
+        response = client.get("/bib/smith2020")
+        assert response.status_code == 200
+        assert "RAW_BIBTEX_CONTENT" in response.text
+        assert "smith2020" in response.text
+
+    def test_bib_detail_not_found(self, client: TestClient) -> None:
+        response = client.get("/bib/unknown")
+        assert response.status_code == 404

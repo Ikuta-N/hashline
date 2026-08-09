@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Bibliography: {{ entry.citekey }} - hashline{% endblock %}
+{% block content %}
+<div class="stack">
+  <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+    <h2>{{ entry.citekey }}</h2>
+    <form method="post" action="/context/read" style="margin: 0;">
+      <input type="hidden" name="citekey" value="{{ entry.citekey }}">
+      <button type="submit">Read this entry</button>
+    </form>
+  </div>
+  
+  <table style="width: 100%; border-collapse: collapse; text-align: left; margin-bottom: 2rem;">
+    <tbody>
+      <tr style="border-bottom: 1px solid var(--line);">
+        <th style="padding: 0.5rem; width: 150px; color: var(--muted);">tag</th>
+        <td style="padding: 0.5rem;">#{{ entry.tag }}</td>
+      </tr>
+      <tr style="border-bottom: 1px solid var(--line);">
+        <th style="padding: 0.5rem; color: var(--muted);">type</th>
+        <td style="padding: 0.5rem;">{{ entry.entry_type }}</td>
+      </tr>
+      <tr style="border-bottom: 1px solid var(--line);">
+        <th style="padding: 0.5rem; color: var(--muted);">title</th>
+        <td style="padding: 0.5rem;">{{ entry.title or '-' }}</td>
+      </tr>
+      <tr style="border-bottom: 1px solid var(--line);">
+        <th style="padding: 0.5rem; color: var(--muted);">author</th>
+        <td style="padding: 0.5rem;">{{ entry.author or '-' }}</td>
+      </tr>
+      <tr style="border-bottom: 1px solid var(--line);">
+        <th style="padding: 0.5rem; color: var(--muted);">year</th>
+        <td style="padding: 0.5rem;">{{ entry.year or '-' }}</td>
+      </tr>
+      <tr style="border-bottom: 1px solid var(--line);">
+        <th style="padding: 0.5rem; color: var(--muted);">doi</th>
+        <td style="padding: 0.5rem;">{{ entry.doi or '-' }}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Raw BibTeX</h3>
+  <pre style="background: var(--card); padding: 1rem; border-radius: 0.5rem; overflow-x: auto; border: 1px solid var(--line); user-select: all;"><code>{{ entry.raw }}</code></pre>
+
+  <p style="margin-top: 1rem;"><a href="/bib">← Back to library</a></p>
+</div>
+{% endblock %}
