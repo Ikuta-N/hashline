@@ -100,3 +100,89 @@ def overview(store: Store) -> dict[str, object]:
         "first_note_at": first_at,
         "last_note_at": last_at,
     }
+
+
+#: The only resample frequencies this module accepts. Pinned deliberately:
+#: pandas deprecated "M" in favour of "ME", and letting an arbitrary string
+#: through would have pandas raise its own, less clear error three frames
+#: down instead of here, at the boundary, before any data is touched.
+_ALLOWED_FREQ: frozenset[str] = frozenset({"D", "W", "ME"})
+
+
+def _check_freq(freq: str) -> None:
+    if freq not in _ALLOWED_FREQ:
+        raise ValueError(f"freq must be one of {sorted(_ALLOWED_FREQ)}, got {freq!r}")
+
+
+def activity(store: Store, *, freq: str = "D") -> pd.DataFrame:
+    """Notes per period, zero-filled where a period has no notes.
+
+    Returns a frame indexed by the period start (tz-aware UTC, named
+    ``period``), spanning every ``freq`` bucket from the first note to the
+    last, with one ``count`` column (int64). A period with no notes is a row
+    of 0, not a missing row -- a gap in a chart built from this frame is a
+    real gap, not an artifact of the data being absent. ``freq`` must be one
+    of ``"D"``, ``"W"`` or ``"ME"``; anything else raises ``ValueError``.
+    """
+    _check_freq(freq)
+    import pandas as pd
+
+    notes = notes_frame(store)
+    if notes.empty:
+        empty_index = pd.DatetimeIndex(
+            [], dtype="datetime64[ns, UTC]", name="period"
+        )
+        return pd.DataFrame({"count": pd.Series([], dtype="int64", index=empty_index)})
+
+    counts = (
+        notes.set_index("created_at")["id"]
+        .sort_index()
+        .resample(freq)
+        .count()
+        .astype("int64")
+        .rename("count")
+        .rename_axis("period")
+    )
+    return counts.to_frame()
+
+
+def tag_trend(store: Store, *, freq: str = "W", top: int = 10) -> pd.DataFrame:
+    """Note counts per (period, tag), wide form: periods as rows, tags as columns.
+
+    Rows are exactly the periods :func:`activity` would produce for this
+    ``freq`` -- the full range spanned by every note, zero-filled. Columns
+    are the ``top`` most-used tags overall (:meth:`Store.list_tags`,
+    most-used first), so the table stays readable on a library with hundreds
+    of tags. A cell is how many notes in that period carried that tag, 0
+    rather than missing where none did. ``freq`` is checked exactly as in
+    :func:`activity`.
+    """
+    _check_freq(freq)
+    import pandas as pd
+
+    periods = activity(store, freq=freq).index
+    top_tags = [tag_count.name for tag_count in store.list_tags(limit=top)]
+
+    if not top_tags:
+        return pd.DataFrame(
+            index=periods, columns=pd.Index([], name="tag"), dtype="int64"
+        )
+
+    notes = notes_frame(store)
+    tags = tags_frame(store)
+    merged = tags[tags["tag"].isin(top_tags)].merge(
+        notes[["id", "created_at"]], left_on="note_id", right_on="id"
+    )
+
+    wide = (
+        merged.set_index("created_at")
+        .groupby("tag")["id"]
+        .resample(freq)
+        .count()
+        .unstack("tag", fill_value=0)
+        .reindex(index=periods, columns=top_tags, fill_value=0)
+        .astype("int64")
+    )
+    wide = wide.rename_axis("period")
+    wide.columns.name = "tag"
+    return wide

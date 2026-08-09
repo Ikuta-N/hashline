@@ -152,3 +152,86 @@ class TestOverview:
         result = analytics.overview(store)
         assert result["first_note_at"] is not None
         assert result["first_note_at"].tzinfo is not None
+
+
+class TestActivity:
+    def test_rejects_an_unknown_freq(self, store: Store) -> None:
+        with pytest.raises(ValueError, match="freq"):
+            analytics.activity(store, freq="M")
+
+    def test_empty_store_gives_an_empty_correctly_typed_frame(
+        self, store: Store
+    ) -> None:
+        df = analytics.activity(store)
+        assert list(df.columns) == ["count"]
+        assert len(df) == 0
+        assert df["count"].dtype == "int64"
+        assert str(df.index.dtype) == "datetime64[ns, UTC]"
+
+    def test_gaps_are_filled_with_zero_not_omitted(self, store: Store) -> None:
+        store.add_note("day one", created_at=datetime(2026, 1, 1, tzinfo=UTC))
+        store.add_note("day three", created_at=datetime(2026, 1, 3, tzinfo=UTC))
+        df = analytics.activity(store, freq="D")
+        assert len(df) == 3
+        assert list(df["count"]) == [1, 0, 1]
+
+    def test_two_notes_same_period_are_summed(self, store: Store) -> None:
+        store.add_note("a", created_at=datetime(2026, 1, 1, 1, tzinfo=UTC))
+        store.add_note("b", created_at=datetime(2026, 1, 1, 22, tzinfo=UTC))
+        df = analytics.activity(store, freq="D")
+        assert len(df) == 1
+        assert df["count"].iloc[0] == 2
+
+    def test_weekly_bucketing(self, store: Store) -> None:
+        store.add_note("a", created_at=datetime(2026, 1, 1, tzinfo=UTC))
+        store.add_note("b", created_at=datetime(2026, 1, 15, tzinfo=UTC))
+        df = analytics.activity(store, freq="W")
+        assert df["count"].sum() == 2
+
+    def test_month_end_bucketing(self, store: Store) -> None:
+        store.add_note("a", created_at=datetime(2026, 1, 5, tzinfo=UTC))
+        store.add_note("b", created_at=datetime(2026, 2, 5, tzinfo=UTC))
+        df = analytics.activity(store, freq="ME")
+        assert len(df) == 2
+        assert list(df["count"]) == [1, 1]
+
+
+class TestTagTrend:
+    def test_rejects_an_unknown_freq(self, store: Store) -> None:
+        with pytest.raises(ValueError, match="freq"):
+            analytics.tag_trend(store, freq="M")
+
+    def test_empty_store_gives_an_empty_frame(self, store: Store) -> None:
+        df = analytics.tag_trend(store)
+        assert len(df) == 0
+        assert len(df.columns) == 0
+
+    def test_wide_form_periods_as_rows_tags_as_columns(self, store: Store) -> None:
+        store.add_note("a #rust", created_at=datetime(2026, 1, 1, tzinfo=UTC))
+        store.add_note("b #python", created_at=datetime(2026, 1, 1, tzinfo=UTC))
+        store.add_note("c #rust", created_at=datetime(2026, 1, 3, tzinfo=UTC))
+        df = analytics.tag_trend(store, freq="D")
+        assert set(df.columns) == {"rust", "python"}
+        assert len(df) == 3  # Jan 1, 2, 3 -- day 2 is a zero-filled gap
+        jan1 = df.iloc[0]
+        assert jan1["rust"] == 1
+        assert jan1["python"] == 1
+        jan2 = df.iloc[1]
+        assert jan2["rust"] == 0
+        assert jan2["python"] == 0
+        jan3 = df.iloc[2]
+        assert jan3["rust"] == 1
+        assert jan3["python"] == 0
+
+    def test_restricted_to_the_top_n_tags_overall(self, store: Store) -> None:
+        when = datetime(2026, 1, 1, tzinfo=UTC)
+        store.add_note("a #popular", created_at=when)
+        store.add_note("b #popular", created_at=when)
+        store.add_note("c #rare", created_at=when)
+        df = analytics.tag_trend(store, freq="D", top=1)
+        assert list(df.columns) == ["popular"]
+
+    def test_cells_are_int64(self, store: Store) -> None:
+        store.add_note("a #rust", created_at=datetime(2026, 1, 1, tzinfo=UTC))
+        df = analytics.tag_trend(store, freq="D")
+        assert df["rust"].dtype == "int64"
