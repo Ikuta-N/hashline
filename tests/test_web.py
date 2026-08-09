@@ -1,5 +1,6 @@
 """Smoke tests for the web adapter: routes and wiring, not note logic."""
 
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -24,6 +25,60 @@ def seeded(client: TestClient, tmp_path: Path) -> TestClient:
         store.add_note("bm25 を調べた #sqlite")
         store.add_note("無関係なメモ #other")
     return client
+
+
+def _hidden_field_values(html: str) -> dict[str, str]:
+    """The name/value pairs of every rendered ``value="..."`` input.
+
+    Used to simulate submitting exactly the fields a fragment actually
+    renders, rather than fields we assume it should carry.
+    """
+    return dict(re.findall(r'name="(\w+)" value="([^"]*)"', html))
+
+
+class TestHtmxTargets:
+    """Every ``hx-target="#id"`` on a full page must have a matching element.
+
+    htmx silently drops the request (never sends it) when the target
+    selector matches nothing on the page, so a button whose hx-target has
+    no matching id is dead. ``/bib`` and ``/bib/{citekey}`` carry "Read"
+    buttons targeting ``#context-strip``, an element only ``_context.html``
+    renders -- and only ``index.html`` includes it.
+    """
+
+    @staticmethod
+    def _seed(tmp_path: Path) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="Test",
+                        tag="smith2020",
+                    )
+                ]
+            )
+            store.add_note("a note #tag")
+
+    @pytest.mark.parametrize(
+        "route",
+        ["/", "/bib", "/bib/smith2020", "/import", "/export"],
+    )
+    def test_every_hx_target_has_a_matching_id_on_the_page(
+        self, client: TestClient, tmp_path: Path, route: str
+    ) -> None:
+        self._seed(tmp_path)
+        response = client.get(route)
+        assert response.status_code == 200
+        targets = set(re.findall(r'hx-target="#([\w-]+)"', response.text))
+        ids = set(re.findall(r'id="([\w-]+)"', response.text))
+        missing = sorted(targets - ids)
+        assert not missing, (
+            f"page {route!r} has hx-target(s) {missing} with no matching "
+            f"id=... element rendered on that same page; htmx will refuse "
+            f"to send those requests"
+        )
 
 
 class TestIndex:
@@ -372,6 +427,90 @@ class TestReply:
         assert response.status_code == 200
         assert 'name="parent_id" value="1"' in response.text
 
+    def test_reply_fragment_carries_citekey_roots_only_and_limit(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="Test",
+                        tag="smith2020",
+                    )
+                ]
+            )
+            note = store.add_note("about smith", citekey="smith2020")
+        response = client.get(
+            f"/notes/{note.id}/reply",
+            params={"citekey": "smith2020", "roots_only": "true", "limit": 5},
+        )
+        assert response.status_code == 200
+        assert 'name="citekey" value="smith2020"' in response.text
+        assert 'name="roots_only" value="true"' in response.text
+        assert 'name="limit" value="5"' in response.text
+
+    def test_reply_button_carries_hx_include_for_the_active_filters(
+        self, seeded: TestClient
+    ) -> None:
+        body = seeded.get("/notes").text
+        match = re.search(
+            r'<button hx-get="/notes/1/reply"[^>]*>', body
+        )
+        assert match is not None, "reply button not found in the timeline"
+        button = match.group(0)
+        assert 'hx-include="' in button, (
+            "reply button has no hx-include, so its POST will not carry "
+            "the active q/tag/citekey/roots_only filters"
+        )
+        for name in ("q", "tag", "citekey", "roots_only"):
+            assert f"[name='{name}']" in button, (
+                f"reply button's hx-include is missing [name='{name}']"
+            )
+
+    def test_posting_a_reply_from_the_rendered_fragment_keeps_the_citekey_filter(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="Test",
+                        tag="smith2020",
+                    )
+                ]
+            )
+            about = store.add_note("about smith", citekey="smith2020")
+            store.add_note("unrelated")
+        fragment = client.get(
+            f"/notes/{about.id}/reply", params={"citekey": "smith2020"}
+        ).text
+        fields = _hidden_field_values(fragment)
+        fields["body"] = "a reply"
+        response = client.post("/notes", data=fields)
+        assert response.status_code == 200
+        assert "about smith" in response.text
+        assert "unrelated" not in response.text
+
+    def test_posting_a_reply_from_the_rendered_fragment_keeps_roots_only(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            root = store.add_note("root note")
+            store.add_note("existing reply", parent_id=root.id)
+        fragment = client.get(
+            f"/notes/{root.id}/reply", params={"roots_only": "true"}
+        ).text
+        fields = _hidden_field_values(fragment)
+        fields["body"] = "new reply"
+        response = client.post("/notes", data=fields)
+        assert response.status_code == 200
+        assert "existing reply" not in response.text
+        assert 'style="margin-left: 20px"' not in response.text
+
     def test_creates_a_reply(self, seeded: TestClient) -> None:
         response = seeded.post("/notes", data={"body": "a reply", "parent_id": "1"})
         assert response.status_code == 200
@@ -482,6 +621,31 @@ class TestContext:
         assert response.status_code == 200
         assert 'class="error"' in response.text
 
+    def test_pinning_an_empty_tag_box_clears_the_tags_and_keeps_the_citekey(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        tag="smith2020",
+                        entry_type="article",
+                        title="Test",
+                    )
+                ]
+            )
+        client.post("/context/read", data={"citekey": "smith2020", "tag": "reading"})
+        client.post("/context/pin", data={"tag": "extra"})
+        # The pin box was pre-filled with "extra"; the user cleared it by
+        # hand and pressed pin, expecting the tags to be gone.
+        response = client.post("/context/pin", data={"tag": ""})
+        assert response.status_code == 200
+        with Store.open(tmp_path / "hashline.db") as store:
+            context = store.get_context()
+        assert context.tags == ()
+        assert context.citekey == "smith2020"
+
     def test_read_start(self, client: TestClient, tmp_path: Path) -> None:
         from hashline.models import BibEntry
 
@@ -581,6 +745,23 @@ class TestContext:
         response = client.get("/context")
         assert response.status_code == 200
         assert 'hx-post="/context/pin"' in response.text
+
+    def test_context_still_offers_the_read_form_with_only_tags_pinned(
+        self, client: TestClient
+    ) -> None:
+        client.post("/context/pin", data={"tag": "idea"})
+        response = client.get("/context")
+        assert response.status_code == 200
+        # Pinning a tag must not hide the only way to start reading a work.
+        assert 'hx-post="/context/read"' in response.text
+
+    def test_index_still_offers_the_read_form_with_only_tags_pinned(
+        self, client: TestClient
+    ) -> None:
+        client.post("/context/pin", data={"tag": "idea"})
+        response = client.get("/")
+        assert response.status_code == 200
+        assert 'hx-post="/context/read"' in response.text
 
     def test_clear_tags_keeps_the_pinned_citekey(
         self, client: TestClient, tmp_path: Path
@@ -829,6 +1010,85 @@ class TestImport:
         assert response.status_code == 200
         assert "could not decode" in response.text
 
+    def test_bib_import_where_every_entry_fails_to_parse_keeps_the_library(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        library = Path("tests/fixtures/bib/library.bib").read_bytes()
+        client.post("/bib/import", files={"file": ("library.bib", library)})
+        with Store.open(tmp_path / "hashline.db") as store:
+            before = {e.citekey for e in store.list_bib_entries()}
+        assert before, "the seed import itself must have worked"
+
+        response = client.post(
+            "/bib/import",
+            data={"replace": "true"},
+            files={
+                "file": ("broken.bib", b"@article{broken2021, title={Unclosed")
+            },
+        )
+        assert response.status_code == 200
+        # entries == [] but problems != [] must not be treated as "nothing
+        # parsed" -- that branch would run upsert_bib_entries([], replace=True)
+        # and wipe the library.
+        with Store.open(tmp_path / "hashline.db") as store:
+            after = {e.citekey for e in store.list_bib_entries()}
+        assert after == before
+        assert "broken2021" in response.text
+
+    def test_bib_import_of_a_truly_empty_file_keeps_the_library(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        library = Path("tests/fixtures/bib/library.bib").read_bytes()
+        client.post("/bib/import", files={"file": ("library.bib", library)})
+        with Store.open(tmp_path / "hashline.db") as store:
+            before = {e.citekey for e in store.list_bib_entries()}
+        assert before
+
+        response = client.post(
+            "/bib/import",
+            data={"replace": "true"},
+            files={"file": ("empty.bib", b"")},
+        )
+        assert response.status_code == 200
+        assert "Parsed to nothing" in response.text
+        with Store.open(tmp_path / "hashline.db") as store:
+            after = {e.citekey for e in store.list_bib_entries()}
+        assert after == before
+
+    def test_bib_import_replace_with_entries_that_parse_still_replaces(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        library = Path("tests/fixtures/bib/library.bib").read_bytes()
+        client.post("/bib/import", files={"file": ("library.bib", library)})
+        with Store.open(tmp_path / "hashline.db") as store:
+            assert store.list_bib_entries()
+
+        response = client.post(
+            "/bib/import",
+            data={"replace": "true"},
+            files={"file": ("only.bib", b"@article{only2023, title={Only}}")},
+        )
+        assert response.status_code == 200
+        with Store.open(tmp_path / "hashline.db") as store:
+            keys = {e.citekey for e in store.list_bib_entries()}
+        assert keys == {"only2023"}
+
+    def test_bib_import_with_a_path_and_an_upload_uses_both(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        response = client.post(
+            "/bib/import",
+            data={"path": "tests/fixtures/bib/library.bib"},
+            files={
+                "file": ("other.bib", b"@article{other2023, title={Other Title}}")
+            },
+        )
+        assert response.status_code == 200
+        with Store.open(tmp_path / "hashline.db") as store:
+            keys = {e.citekey for e in store.list_bib_entries()}
+        assert "smith2020" in keys  # from the path
+        assert "other2023" in keys  # from the upload
+
 
 class TestExport:
     def test_export_preview_empty(self, client: TestClient) -> None:
@@ -889,9 +1149,17 @@ class TestExport:
         response = client.get("/export", params={"root": 999})
         assert response.status_code == 200
 
-    def test_export_download_invalid_root(self, client: TestClient) -> None:
+    def test_export_download_of_a_nonexistent_root_answers_200_not_4xx(
+        self, client: TestClient
+    ) -> None:
+        # A rejected form never answers 4xx in this app (see /export and every
+        # other handler): a 4xx here renders raw JSON in the browser instead of
+        # the readable error /export shows for the same condition. This replaces
+        # an older test that asserted the 400.
         response = client.get("/export/download", params={"root": 999})
-        assert response.status_code == 400
+        assert response.status_code == 200
+        assert "Content-Disposition" not in response.headers
+        assert 'class="error"' in response.text
 
     def test_export_preview_accepts_a_browser_blank_root(
         self, client: TestClient
