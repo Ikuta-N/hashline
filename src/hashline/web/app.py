@@ -42,7 +42,10 @@ _HERE: Final = Path(__file__).parent
 
 templates = Jinja2Templates(directory=str(_HERE / "templates"))
 
-_log: Final = logging.getLogger("hashline.web")
+#: uvicorn configures only its own loggers, so a logger named after this
+#: package prints nothing and the indexing pass would run invisibly. This is
+#: the stream the person who just started the server is already watching.
+_log: Final = logging.getLogger("uvicorn.error")
 
 #: Set to skip the startup indexing pass. For the test suite, and for anyone
 #: who wants the server up before a large library finishes embedding.
@@ -71,10 +74,16 @@ def _index_in_background() -> None:
         # A fresh connection: sqlite3 objects belong to the thread that made
         # them, and this one outlives the request that started it.
         with Store.open(default_db_path()) as store:
-            if not hybrid.pending_count(store):
+            pending = hybrid.pending_count(store)
+            if not pending:
                 return
-            _log.info("indexing notes in the background")
-            done = hybrid.index_pending(store)
+            _log.info("indexing %d notes in the background", pending)
+            done = hybrid.index_pending(
+                store,
+                on_progress=lambda seen, total: _log.info(
+                    "  indexed %d/%d", seen, total
+                ),
+            )
             _log.info("indexed %d notes", done)
     except Exception:  # noqa: BLE001 - a failed index must not take the app down
         _log.exception("background indexing failed; semantic search may be stale")

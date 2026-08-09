@@ -7,7 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from hashline.cli import app
-from hashline.ml import embed
+from hashline.ml import embed, hybrid
 from hashline.store import Store
 
 runner = CliRunner()
@@ -715,6 +715,11 @@ class TestSemanticSearch:
             raise embed.MlExtraNotInstalled("needs the 'ml' extra: uv sync --extra ml")
 
         monkeypatch.setattr("hashline.ml.embed.load_model", refuse)
+        # A loaded model is cached for the life of the process, so the index
+        # above would otherwise satisfy this search without a second load --
+        # which is the point of the cache, and has to be undone to simulate a
+        # backend that cannot be loaded at all.
+        hybrid.forget_models()
         result = runner.invoke(app, ["--db", str(db), "search", "one", "--semantic"])
         assert result.exit_code == 1
         assert "--extra ml" in result.output

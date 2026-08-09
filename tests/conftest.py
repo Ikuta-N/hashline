@@ -20,6 +20,11 @@ def no_background_indexing(monkeypatch: pytest.MonkeyPatch) -> None:
     runs after this fixture.
     """
     monkeypatch.setenv("HASHLINE_NO_INDEX", "1")
+    # Models are cached for the life of the process, so a fake one swapped in
+    # by a test would otherwise be handed to every test after it.
+    from hashline.ml.hybrid import forget_models
+
+    forget_models()
 
 
 @pytest.fixture

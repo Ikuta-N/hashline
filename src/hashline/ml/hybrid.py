@@ -15,9 +15,11 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
+    from hashline.ml.protocols import Embedder
     from hashline.store import Store
 
 #: How deep each ranker contributes to the fusion, regardless of the limit
@@ -61,6 +63,24 @@ def embedding_key(model_name: str | None = None) -> str:
     from hashline.ml import embed
 
     return embed.embedding_key(model_name or embed.DEFAULT_MODEL)
+
+
+@lru_cache(maxsize=2)
+def load_model(model_name: str) -> Embedder:
+    """A loaded model, kept for the life of the process.
+
+    Loading e5-small off disk takes seconds. The CLI pays that once per
+    command, but the web asks for a ranking on every search, so without this
+    a user would wait for the model again on each keystroke.
+    """
+    from hashline.ml import embed
+
+    return embed.load_model(model_name)
+
+
+def forget_models() -> None:
+    """Drop the cached models. For tests that swap the backend out."""
+    load_model.cache_clear()
 
 
 def pending_count(store: Store, *, model_name: str | None = None) -> int:
@@ -108,7 +128,7 @@ def hybrid_search(
     if not rows:
         raise NotIndexed(f"no notes are indexed for {key}")
 
-    query_vector = embed.embed_texts([query], model=embed.load_model(name))[0]
+    query_vector = embed.embed_texts([query], model=load_model(name))[0]
 
     ids = [note_id for note_id, _ in rows]
     ranked = rank_by_similarity(
@@ -152,7 +172,7 @@ def index_pending(
     if not pending:
         return 0
 
-    model = embed.load_model(name)
+    model = load_model(name)
     done = 0
     for start in range(0, len(pending), EMBED_BATCH):
         batch = pending[start : start + EMBED_BATCH]
