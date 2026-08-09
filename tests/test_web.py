@@ -79,7 +79,7 @@ class TestHtmxTargets:
 
     @pytest.mark.parametrize(
         "route",
-        ["/", "/bib", "/bib/smith2020", "/import", "/export"],
+        ["/", "/bib", "/bib/smith2020", "/import", "/export", "/stats"],
     )
     def test_every_hx_target_has_a_matching_id_on_the_page(
         self, client: TestClient, tmp_path: Path, route: str
@@ -2021,6 +2021,106 @@ class TestExport:
         assert "kept 1 entries still cited" in response.text
 
 
+class TestStats:
+    """The web's read-only view onto ``hashline.analytics``."""
+
+    @pytest.mark.parametrize(
+        "view", ["overview", "activity", "tags", "reading", "threads"]
+    )
+    def test_renders_for_every_view(self, seeded: TestClient, view: str) -> None:
+        response = seeded.get("/stats", params={"view": view})
+        assert response.status_code == 200
+        assert "hashline" in response.text
+
+    def test_nav_entry_exists_and_highlights(self, client: TestClient) -> None:
+        response = client.get("/stats")
+        assert response.status_code == 200
+        assert 'href="/stats" class="current"' in response.text
+        # And it must be offered from every other page too.
+        assert 'href="/stats"' in client.get("/").text
+
+    def test_overview_is_the_default_view_and_shows_the_totals(
+        self, seeded: TestClient
+    ) -> None:
+        body = seeded.get("/stats").text
+        assert "note_count" in body
+        assert "tag_count" in body
+        assert "work_count" in body
+
+    def test_empty_database_renders_headers_and_no_rows(
+        self, client: TestClient
+    ) -> None:
+        response = client.get("/stats", params={"view": "activity"})
+        assert response.status_code == 200
+        assert "<th" in response.text
+        assert "<td" not in response.text
+
+    def test_bad_freq_answers_200_with_a_visible_error(
+        self, seeded: TestClient
+    ) -> None:
+        response = seeded.get("/stats", params={"view": "activity", "freq": "bogus"})
+        assert response.status_code == 200
+        assert 'class="error"' in response.text
+
+    def test_bad_freq_on_the_tags_view_also_answers_200_with_an_error(
+        self, seeded: TestClient
+    ) -> None:
+        response = seeded.get("/stats", params={"view": "tags", "freq": "bogus"})
+        assert response.status_code == 200
+        assert 'class="error"' in response.text
+
+    def test_tags_view_lists_the_top_tags_as_columns(self, seeded: TestClient) -> None:
+        body = seeded.get("/stats", params={"view": "tags"}).text
+        assert "sqlite" in body
+        assert "other" in body
+
+    def test_reading_view_shows_a_cited_work(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="A title",
+                        tag="smith2020",
+                    )
+                ]
+            )
+            store.add_note("about smith", citekey="smith2020")
+        body = client.get("/stats", params={"view": "reading"}).text
+        assert "smith2020" in body
+        assert "A title" in body
+
+    def test_threads_view_shows_reply_counts(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            root = store.add_note("root")
+            store.add_note("reply", parent_id=root.id)
+        body = client.get("/stats", params={"view": "threads"}).text
+        assert str(root.id) in body
+
+    def test_escapes_note_derived_text(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="xss2020",
+                        entry_type="article",
+                        title="<script>alert(1)</script>",
+                        tag="xss2020",
+                    )
+                ]
+            )
+            store.add_note("a note", citekey="xss2020")
+        body = client.get("/stats", params={"view": "reading"}).text
+        assert "<script>alert(1)</script>" not in body
+
+
 class TestCsrf:
     """State-changing routes must reject a cross-origin form post.
 
@@ -2204,7 +2304,7 @@ class TestFormContracts:
 
     @pytest.mark.parametrize(
         "route",
-        ["/", "/bib", "/bib/smith2020", "/import", "/export"],
+        ["/", "/bib", "/bib/smith2020", "/import", "/export", "/stats"],
     )
     def test_every_form_submits_the_fields_its_route_requires(
         self, client: TestClient, tmp_path: Path, route: str
