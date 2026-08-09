@@ -31,6 +31,7 @@ from hashline.importer import parse_documents
 from hashline.models import DEFAULT_READING_TAG, Context, Note
 from hashline.outline import OutlineNode, build_tree, render_markdown
 from hashline.store import NoteHasReplies, Store, default_db_path
+from hashline.tags import normalize_tag
 
 _HERE: Final = Path(__file__).parent
 
@@ -401,7 +402,10 @@ def read_context(
         )
     else:
         try:
-            tag_name = tag.strip() or DEFAULT_READING_TAG
+            # Normalize before comparing: the store keeps tags in canonical
+            # form, so a raw "#reading" typed into a strip that is all about
+            # #tags would miss the check below and be pinned a second time.
+            tag_name = normalize_tag(tag) if tag.strip() else DEFAULT_READING_TAG
             # The context strip shows pinned tags and the pinned work as two
             # independent things with separate clear buttons, so starting a
             # read must add the reading tag, not replace what was pinned.
