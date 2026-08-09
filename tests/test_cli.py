@@ -844,3 +844,30 @@ class TestSemanticSearch:
         run(db, "index")
         assert "no matches" in run(db, "search", "one", "--limit", "0")
         assert "no matches" in run(db, "search", "one", "--semantic", "--limit", "0")
+
+
+class TestStatsTimezone:
+    """One command must not report the same note at two different hours."""
+
+    def test_event_timestamps_print_in_local_time(self, db: Path) -> None:
+        """The overview and `hashline list` already do; the frames did not."""
+        run(db, "add", "a note")
+        overview = run(db, "stats")
+        threads = run(db, "stats", "--threads")
+        hour = [
+            line.split("first note: ")[1][:16]
+            for line in overview.splitlines()
+            if line.startswith("first note:")
+        ][0]
+        assert hour in threads, (
+            f"the overview says {hour!r} but --threads reports\n{threads}"
+        )
+
+    def test_period_buckets_stay_in_utc(self, db: Path) -> None:
+        """A bucket is not an instant.
+
+        Shifting the resample index would label a UTC day "09:00" for a reader
+        nine hours ahead, which says something the data does not.
+        """
+        run(db, "add", "a note")
+        assert "+00:00" in run(db, "stats", "--activity")

@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Final, cast
+from typing import TYPE_CHECKING, Annotated, Final, cast
 
 import typer
 
@@ -20,6 +20,9 @@ from hashline.models import DEFAULT_READING_TAG, BibEntry, Context, Note
 from hashline.outline import build_tree, render_markdown
 from hashline.store import NoteHasReplies, Store, default_db_path
 from hashline.tags import normalize_tag
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 _BODY_WIDTH: Final = 90
 _WHITESPACE_RE: Final = re.compile(r"\s+")
@@ -405,12 +408,33 @@ def stats(
             df = pd.DataFrame([overview])
 
     if csv is not None:
+        # UTC on the way to a file: a CSV is read by a program, and the
+        # timestamps the store keeps are the unambiguous ones.
         df.to_csv(csv, index=bool(chosen))
 
     if chosen:
-        typer.echo(df.to_string())
+        typer.echo(_in_local_time(df).to_string())
     else:
         typer.echo(_format_overview(overview))
+
+
+def _in_local_time(frame: "pd.DataFrame") -> "pd.DataFrame":
+    """Move every timestamp in a frame to the reader's timezone.
+
+    The overview and `hashline list` already print local time, so leaving the
+    frames in UTC made one command report the same note at two different hours
+    depending on which flag you passed.
+    """
+    here = datetime.now().astimezone().tzinfo
+    localised = frame.copy()
+    # The index of activity/tag_trend is a bucket, not an instant. Shifting it
+    # would label a UTC day "09:00" for a reader nine hours ahead, which says
+    # something the data does not. Only the timestamps of real events move.
+    for column in localised.columns:
+        values = localised[column]
+        if values.dtype.kind == "M" and getattr(values.dt, "tz", None) is not None:
+            localised[column] = values.dt.tz_convert(here).dt.tz_localize(None)
+    return localised
 
 
 def _format_overview(overview: dict[str, object]) -> str:
