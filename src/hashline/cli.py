@@ -23,15 +23,6 @@ from hashline.tags import normalize_tag
 _BODY_WIDTH: Final = 90
 _WHITESPACE_RE: Final = re.compile(r"\s+")
 
-#: Notes per encode() call. Big enough that the model is not called per note,
-#: small enough that progress appears on a large library.
-_EMBED_BATCH: Final = 32
-
-#: How deep each ranker contributes to the fusion, regardless of --limit.
-#: Fusing only the top 20 of each would let a note both rankers place 25th
-#: lose to one that a single ranker happened to put 20th.
-_FUSION_DEPTH: Final = 100
-
 
 class Mode(StrEnum):
     """How an imported document is cut into notes."""
@@ -267,45 +258,29 @@ def index(
     # Imported here, not at module level: numpy alone more than doubles the
     # startup of `hashline add`, and nothing but this command and a semantic
     # search needs it.
-    from hashline.ml import embed
-    from hashline.ml.search import normalize_rows
+    from hashline.ml import embed, hybrid
 
-    name = model_name if model_name is not None else embed.DEFAULT_MODEL
-    key = embed.embedding_key(name)
+    key = hybrid.embedding_key(model_name)
+
+    def report(done: int, total: int) -> None:
+        typer.echo(f"  {done}/{total}", err=True)
 
     with _open(ctx) as store:
-        if rebuild:
-            pending = store.list_notes(limit=limit if limit is not None else -1)
-        else:
-            pending = store.notes_without_embedding(key, limit=limit)
-        if not pending:
-            typer.echo(f"nothing to index for {key}")
-            return
-
         try:
-            model = embed.load_model(name)
+            done = hybrid.index_pending(
+                store,
+                model_name=model_name,
+                limit=limit,
+                rebuild=rebuild,
+                on_progress=report,
+            )
         except embed.MlExtraNotInstalled as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(1) from exc
 
-        done = 0
-        for start in range(0, len(pending), _EMBED_BATCH):
-            batch = pending[start : start + _EMBED_BATCH]
-            # Stored normalized, so a search is one matrix product and the
-            # ranker's own normalization becomes a no-op.
-            vectors = normalize_rows(
-                embed.embed_texts([note.body for note in batch], model=model)
-            )
-            for note, vector in zip(batch, vectors, strict=True):
-                store.upsert_embedding(
-                    note.id,
-                    model=key,
-                    vector=embed.pack_vector(vector),
-                    dim=int(vector.shape[0]),
-                )
-            done += len(batch)
-            typer.echo(f"  {done}/{len(pending)}", err=True)
-
+    if not done:
+        typer.echo(f"nothing to index for {key}")
+        return
     typer.echo(f"indexed {done} notes with {key}")
 
 
@@ -597,62 +572,34 @@ def _semantic_search(
     limit: int,
     model_name: str | None,
 ) -> None:
-    """Rank by keyword and by meaning, then fuse the two orders.
+    """Print the hybrid ranking. The ranking itself lives in ``ml.hybrid``.
 
-    BM25 and cosine similarity are on unrelated scales, so the ranks are
-    combined rather than the scores: reciprocal rank fusion needs no
-    normalization constant to tune, and adding a third ranker later costs
-    nothing.
+    Both adapters call the same code: a UI that grew its own copy of the
+    fusion would be note logic living in a UI.
     """
-    from hashline.ml import embed
-    from hashline.ml.search import fuse_rankings, rank_by_similarity
-
-    name = model_name if model_name is not None else embed.DEFAULT_MODEL
-    key = embed.embedding_key(name)
-
-    if not embed.is_available():
-        # Checked before the index is consulted so the first message names the
-        # actual cause. Otherwise an unindexed database says "run hashline
-        # index", and only that command reveals the extra is missing.
-        typer.echo(
-            "semantic search needs the 'ml' extra: uv sync --extra ml", err=True
-        )
-        raise typer.Exit(1)
-
-    rows = list(store.iter_embeddings(key))
-    if tag is not None:
-        allowed = {note.id for note in store.list_notes(tag=tag, limit=-1)}
-        rows = [row for row in rows if row[0] in allowed]
-    if not rows:
-        typer.echo(f"no notes are indexed for {key}; run `hashline index` first")
-        return
+    from hashline.ml import hybrid
+    from hashline.ml.embed import MlExtraNotInstalled
 
     try:
-        query_vector = embed.embed_texts([query], model=embed.load_model(name))[0]
-    except embed.MlExtraNotInstalled as exc:
+        result = hybrid.hybrid_search(
+            store, query, tag=tag, limit=limit, model_name=model_name
+        )
+    except MlExtraNotInstalled as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
-
-    ids = [note_id for note_id, _ in rows]
-    ranked = rank_by_similarity(
-        query_vector, ids, embed.unpack_matrix([blob for _, blob in rows])
-    )
-    keyword_ids = [
-        hit.note.id for hit in store.search_notes(query, tag=tag, limit=_FUSION_DEPTH)
-    ]
-    fused = fuse_rankings(
-        [keyword_ids, [note_id for note_id, _ in ranked[:_FUSION_DEPTH]]],
-        limit=limit,
-    )
+    except hybrid.NotIndexed as exc:
+        typer.echo(f"{exc}; run `hashline index` first")
+        return
 
     # Said out loud rather than left as a short result list: a search that
     # quietly ignores half the library is worse than one that says so.
-    pending = len(store.notes_without_embedding(key))
-    if pending:
+    if result.pending:
         typer.echo(
-            f"{pending} notes are not indexed yet; run `hashline index`", err=True
+            f"{result.pending} notes are not indexed yet; run `hashline index`",
+            err=True,
         )
 
+    fused = result.hits
     if not fused:
         typer.echo("no matches")
         return

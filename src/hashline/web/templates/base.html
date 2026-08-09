@@ -30,11 +30,12 @@
   nav.main a { color: var(--muted); text-decoration: none; }
   nav.main a.current { color: var(--fg); font-weight: bold; }
   form.composer { display: flex; gap: .5rem; margin-bottom: 1.25rem; }
-  input[type=text] {
+  input[type=text], textarea {
     flex: 1; padding: .6rem .75rem; font: inherit; color: var(--fg);
     background: var(--card); border: 1px solid var(--line); border-radius: .5rem;
   }
-  input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  textarea { resize: vertical; }
+  input[type=text]:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   button {
     padding: .6rem 1rem; font: inherit; cursor: pointer; color: var(--bg);
     background: var(--accent); border: 0; border-radius: .5rem;

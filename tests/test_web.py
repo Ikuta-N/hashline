@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -35,6 +36,20 @@ def _hidden_field_values(html: str) -> dict[str, str]:
     renders, rather than fields we assume it should carry.
     """
     return dict(re.findall(r'name="(\w+)" value="([^"]*)"', html))
+
+
+def _fail(reason: str) -> object:
+    raise AssertionError(reason)
+
+
+class _FakeEmbedder:
+    """Returns one fixed vector, so no model is ever downloaded."""
+
+    def __init__(self, vector: list[float]) -> None:
+        self._vector = vector
+
+    def encode(self, texts: list[str]) -> "np.ndarray":
+        return np.array([self._vector for _ in texts], dtype=np.float32)
 
 
 class TestHtmxTargets:
@@ -200,27 +215,31 @@ class TestTimelineFragment:
 
 
 class TestFilters:
-    @pytest.mark.parametrize("label", ["all", "#sqlite"])
-    def test_the_tag_links_keep_a_widened_limit(
-        self, seeded: TestClient, label: str
-    ) -> None:
-        """``limit`` is a filter, so the plain links must carry it too.
-
-        Every htmx path on this page carries ``limit`` because widening it
-        and then typing, replying or deleting used to snap the timeline
-        back to 50. The tag chips are ordinary ``<a href>`` links and were
-        left behind, so one click undoes the widening with nothing on
-        screen to say the list just got shorter.
+    def test_the_tag_chips_nav_is_gone(self, seeded: TestClient) -> None:
+        """The chip nav grew without bound and pushed the timeline off
+        screen, so it was removed. ``/?tag=NAME`` must keep working
+        though -- the hidden tag input and every htmx control's
+        hx-include still carry it -- so that is what replaces the old
+        "clicking a tag chip keeps working" coverage below.
         """
-        page = seeded.get("/", params={"limit": "200"})
+        page = seeded.get("/")
         assert page.status_code == 200
-        pattern = r'<a href="(/\?[^"]*)"[^>]*>\s*' + re.escape(label)
-        links = re.findall(pattern, page.text)
-        assert links, f"no {label!r} link found on the page"
-        for href in links:
-            assert "limit=200" in href, (
-                f"the {label!r} link is {href!r}, which drops the widened limit"
-            )
+        assert 'class="tags"' not in page.text
+        assert 'href="/?tag=' not in page.text, (
+            "a tag-chip link is still being rendered somewhere on the page"
+        )
+
+    def test_tag_query_param_still_filters_the_timeline(
+        self, seeded: TestClient
+    ) -> None:
+        page = seeded.get("/", params={"tag": "sqlite"})
+        assert page.status_code == 200
+        assert "bm25" in page.text
+        assert "無関係なメモ" not in page.text
+        # /?tag=NAME must keep working from outside the app (a bookmark, a
+        # link elsewhere), and every htmx control still has to pick the
+        # value up through hx-include, so the hidden field has to survive.
+        assert 'name="tag" value="sqlite"' in page.text
 
     def test_filter_by_citekey(self, client: TestClient, tmp_path: Path) -> None:
         with Store.open(tmp_path / "hashline.db") as store:
@@ -540,12 +559,77 @@ class TestCreateNote:
             "input's name"
         )
 
+    def test_composer_body_is_a_textarea_with_a_ctrl_enter_submit_handler(
+        self, client: TestClient
+    ) -> None:
+        # A plain <input type=text name=body> can never hold a line break,
+        # so Enter has to become a newline and Ctrl/Cmd+Enter has to submit
+        # instead. requestSubmit() is required here, not form.submit(),
+        # because only requestSubmit() fires the cancelable submit event
+        # htmx listens for.
+        body = client.get("/").text
+        textarea = re.search(r"<textarea\b[^>]*name=\"body\"[^>]*>", body)
+        assert textarea is not None, "composer body field is not a textarea"
+        markup = textarea.group(0)
+        assert "onkeydown" in markup, "composer textarea has no keydown handler"
+        assert "ctrlKey" in markup and "metaKey" in markup, (
+            "composer textarea's keydown handler does not check for "
+            "Ctrl/Cmd+Enter"
+        )
+        assert "requestSubmit()" in markup, (
+            "composer textarea must call requestSubmit(), not submit(), so "
+            "htmx's submit listener fires"
+        )
+        assert 'autofocus' in markup
+        assert "Ctrl+Enter" in markup or "Ctrl" in markup
+
 
 class TestReply:
     def test_renders_reply_fragment(self, seeded: TestClient) -> None:
         response = seeded.get("/notes/1/reply")
         assert response.status_code == 200
         assert 'name="parent_id" value="1"' in response.text
+
+    def test_reply_body_is_a_textarea_with_a_ctrl_enter_submit_handler(
+        self, seeded: TestClient
+    ) -> None:
+        body = seeded.get("/notes/1/reply").text
+        textarea = re.search(r"<textarea\b[^>]*name=\"body\"[^>]*>", body)
+        assert textarea is not None, "reply body field is not a textarea"
+        markup = textarea.group(0)
+        assert "onkeydown" in markup, "reply textarea has no keydown handler"
+        assert "ctrlKey" in markup and "metaKey" in markup, (
+            "reply textarea's keydown handler does not check for "
+            "Ctrl/Cmd+Enter"
+        )
+        assert "requestSubmit()" in markup, (
+            "reply textarea must call requestSubmit(), not submit(), so "
+            "htmx's submit listener fires"
+        )
+
+    def test_reply_form_has_a_cancel_button(self, seeded: TestClient) -> None:
+        # hx-swap="afterend" leaves the reply form sitting under the note
+        # with no way to get rid of it short of submitting or reloading.
+        body = seeded.get("/notes/1/reply").text
+        cancel = re.search(r'<button type="button"[^>]*>\s*cancel\s*</button>', body)
+        assert cancel is not None, "reply fragment has no cancel button"
+        assert "this.closest('form').remove()" in cancel.group(0), (
+            "cancel button does not remove its own form"
+        )
+
+    def test_reply_textarea_dismisses_the_form_on_escape(
+        self, seeded: TestClient
+    ) -> None:
+        body = seeded.get("/notes/1/reply").text
+        textarea = re.search(r"<textarea\b[^>]*name=\"body\"[^>]*>", body)
+        assert textarea is not None
+        markup = textarea.group(0)
+        assert "Escape" in markup, (
+            "reply textarea's keydown handler does not dismiss on Escape"
+        )
+        assert ".remove()" in markup, (
+            "reply textarea's Escape handler does not remove the form"
+        )
 
     def test_reply_fragment_carries_citekey_roots_only_and_limit(
         self, client: TestClient, tmp_path: Path
@@ -658,9 +742,112 @@ class TestThreadView:
         assert "grandchild" in body
         assert "unrelated" not in body
 
-    def test_unknown_id_is_404(self, client: TestClient) -> None:
+    def test_unknown_id_answers_200_with_an_error_not_a_404(
+        self, client: TestClient
+    ) -> None:
+        # htmx does not swap a non-2xx response, so a stale thread button
+        # (the note behind it deleted from another tab, say) would leave the
+        # page sitting there doing nothing. The existing error slot in
+        # _timeline.html renders instead.
         response = client.get("/notes/999/thread")
-        assert response.status_code == 404
+        assert response.status_code == 200
+        assert 'class="error"' in response.text
+
+    def test_thread_button_carries_hx_include_for_the_active_filters(
+        self, seeded: TestClient
+    ) -> None:
+        body = seeded.get("/notes").text
+        match = re.search(r'<button hx-get="/notes/1/thread"[^>]*>', body)
+        assert match is not None, "thread button not found in the timeline"
+        button = match.group(0)
+        assert 'hx-include="' in button, (
+            "thread button has no hx-include, so following it drops the "
+            "active q/tag/citekey/roots_only/limit filters"
+        )
+        for name in ("q", "tag", "citekey", "roots_only", "limit"):
+            assert f"[name='{name}']" in button, (
+                f"thread button's hx-include is missing [name='{name}']"
+            )
+
+    def test_thread_view_accepts_the_filter_query_params(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        # _timeline.html itself renders no hidden q/tag/citekey/roots_only/
+        # limit fields -- those live in index.html, outside the swapped
+        # #timeline -- so what this proves is that thread() takes the same
+        # filter params as every other timeline-returning route and passes
+        # them into the back control (checked separately below) instead of
+        # rejecting them or dropping them silently.
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("root #keep")
+        response = client.get(
+            "/notes/1/thread",
+            params={
+                "q": "root",
+                "tag": "keep",
+                "citekey": "",
+                "roots_only": "true",
+                "limit": 5,
+            },
+        )
+        assert response.status_code == 200
+        assert "root" in response.text
+
+    def test_thread_view_has_a_back_control_with_the_active_filters(
+        self, seeded: TestClient
+    ) -> None:
+        response = seeded.get("/notes/1/thread", params={"tag": "sqlite"})
+        assert response.status_code == 200
+        back = re.search(r'<button hx-get="/notes"[^>]*>', response.text)
+        assert back is not None, "thread view has no back-to-notes control"
+        button = back.group(0)
+        assert 'hx-target="#timeline"' in button
+        assert 'hx-swap="outerHTML"' in button
+        for name in ("q", "tag", "citekey", "roots_only", "limit"):
+            assert f"[name='{name}']" in button, (
+                f"back control's hx-include is missing [name='{name}']"
+            )
+        assert "all notes" in response.text
+
+    def test_pressing_back_restores_exactly_the_filtered_timeline(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("keep this #keep")
+            store.add_note("drop this #other")
+        # What the filtered index page looked like before the user opened
+        # a thread from inside it.
+        before = client.get("/", params={"tag": "keep"}).text
+        assert "keep this" in before
+        assert "drop this" not in before
+
+        client.get("/notes/1/thread", params={"tag": "keep"})
+
+        # The back control's hx-include names q/tag/citekey/roots_only/limit,
+        # which htmx reads from the fields still on the page (outside the
+        # swapped #timeline) -- so pressing it fires exactly this request.
+        after = client.get("/notes", params={"tag": "keep"}).text
+        assert "keep this" in after
+        assert "drop this" not in after
+
+    def test_ordinary_timeline_fragments_render_no_back_control(
+        self, seeded: TestClient
+    ) -> None:
+        # _timeline.html is also rendered by routes that pass no thread_root;
+        # Jinja renders that as falsey, so nothing should change for them.
+        body = seeded.get("/notes").text
+        assert "all notes" not in body
+        assert 'hx-get="/notes"' not in body
+
+    def test_thread_view_has_an_export_this_thread_link(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("root")
+        response = client.get("/notes/1/thread")
+        assert response.status_code == 200
+        assert 'href="/export?root=1"' in response.text
+        assert "export this thread" in response.text
 
 
 class TestDeleteNote:
@@ -1138,9 +1325,34 @@ class TestBib:
             )
         response = client.get("/bib")
         assert response.status_code == 200
-        assert "smith2020" in response.text
+        # The list identifies an entry by what a person recognises it by --
+        # title, author, year -- not by its citekey, which is a lookup key.
+        # The citekey survives only as the destination of the title link.
         assert "A title" in response.text
         assert "Smith" in response.text
+        assert "2020" in response.text
+        assert '<th style="padding: 0.5rem;">Citekey</th>' not in response.text
+        assert 'href="/bib/smith2020">A title</a>' in response.text
+
+    def test_bib_list_entry_with_no_title_is_still_clickable(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        # The link moved onto the title text. A malformed BibTeX record
+        # with no title must fall back to '(no title)' as the link text,
+        # not disappear -- otherwise it becomes unreachable from the UI.
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="notitle2020",
+                        entry_type="misc",
+                        tag="notitle2020",
+                    )
+                ]
+            )
+        response = client.get("/bib")
+        assert response.status_code == 200
+        assert 'href="/bib/notitle2020">(no title)</a>' in response.text
 
     def test_bib_detail_found(self, client: TestClient, tmp_path: Path) -> None:
         with Store.open(tmp_path / "hashline.db") as store:
@@ -1447,6 +1659,147 @@ class TestExport:
         assert 'class="error"' in response.text
         # The reader is looking at a form, not a terminal.
         assert "--root" not in response.text
+
+    def test_export_form_no_longer_offers_a_free_text_root_box(
+        self, client: TestClient
+    ) -> None:
+        # Typing a note id by hand is what this replaces -- the thread view
+        # is where a user already knows which thread they want.
+        body = client.get("/export").text
+        assert '<input type="number" name="root"' not in body
+        assert "Thread Root ID" not in body
+
+    def test_export_with_a_root_renders_it_as_a_read_only_chip(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            parent = store.add_note("parent")
+            store.add_note("child", parent_id=parent.id)
+        response = client.get("/export", params={"root": parent.id})
+        assert response.status_code == 200
+        assert f"thread #{parent.id}" in response.text
+        # Still carried into the download form.
+        assert f'name="root" value="{parent.id}"' in response.text
+
+    def test_export_chip_dismiss_link_drops_root(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            parent = store.add_note("parent")
+        body = client.get("/export", params={"root": parent.id}).text
+        link = re.search(r'<a href="([^"]*)"[^>]*>&#10005;</a>', body)
+        assert link is not None, "no dismiss link found next to the chip"
+        assert "root=" not in link.group(1), (
+            "the chip's dismiss link still carries the root filter"
+        )
+
+    def test_export_tag_is_a_select_populated_from_the_store(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        # A free-text box lets a typo silently export nothing; a <select>
+        # can only offer tags that actually exist.
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("a #sqlite note")
+            store.add_note("another #sqlite note")
+            store.add_note("a #web note")
+        body = client.get("/export").text
+        select = re.search(r'<select name="tag"[^>]*>.*?</select>', body, re.S)
+        assert select is not None, "tag is not rendered as a <select>"
+        markup = select.group(0)
+        assert re.search(r'<option value=""[^>]*>', markup), (
+            "no empty-value 'all' option found in the tag select"
+        )
+        assert "sqlite (2)" in markup
+        assert "web (1)" in markup
+
+    def test_export_citekey_select_shows_titles(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="A Title",
+                        tag="smith2020",
+                    )
+                ]
+            )
+        body = client.get("/export").text
+        select = re.search(r'<select name="citekey"[^>]*>.*?</select>', body, re.S)
+        assert select is not None, "citekey is not rendered as a <select>"
+        markup = select.group(0)
+        assert '<option value="smith2020"' in markup
+        assert "A Title" in markup
+
+    def test_export_select_marks_the_current_filter_selected(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="A Title",
+                        tag="smith2020",
+                    )
+                ]
+            )
+            store.add_note("a #sqlite note")
+        body = client.get(
+            "/export", params={"tag": "sqlite", "citekey": "smith2020"}
+        ).text
+        assert re.search(
+            r'<option value="sqlite"[^>]*selected[^>]*>', body
+        ), "the tag currently filtered on is not marked selected"
+        assert re.search(
+            r'<option value="smith2020"[^>]*selected[^>]*>', body
+        ), "the citekey currently filtered on is not marked selected"
+
+    def test_export_preview_trigger_covers_the_selects(
+        self, client: TestClient
+    ) -> None:
+        # <select> is not an <input>, so "input from:input, change from:input"
+        # alone stops matching the moment Tag/Citekey become dropdowns --
+        # changing either would silently stop refreshing the preview.
+        body = client.get("/export").text
+        form = re.search(r'<form hx-get="/export"[^>]*>', body)
+        assert form is not None, "export preview form not found"
+        trigger = re.search(r'hx-trigger="([^"]*)"', form.group(0))
+        assert trigger is not None, "export preview form has no hx-trigger"
+        assert "select" in trigger.group(1), (
+            f"hx-trigger {trigger.group(1)!r} does not mention select, so "
+            f"choosing a tag or citekey from the dropdown will not refresh "
+            f"the preview"
+        )
+
+    def test_download_form_hidden_fields_carry_the_selected_tag_and_citekey(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.upsert_bib_entries(
+                [
+                    BibEntry(
+                        citekey="smith2020",
+                        entry_type="article",
+                        title="A Title",
+                        tag="smith2020",
+                    )
+                ]
+            )
+            store.add_note("a #sqlite note")
+        body = client.get(
+            "/export", params={"tag": "sqlite", "citekey": "smith2020"}
+        ).text
+        download_form = re.search(
+            r'<form method="get" action="/export/download".*?</form>', body, re.S
+        )
+        assert download_form is not None, "download form not found"
+        markup = download_form.group(0)
+        assert 'name="tag" value="sqlite"' in markup
+        assert 'name="citekey" value="smith2020"' in markup
 
     def test_export_download_success(self, seeded: TestClient) -> None:
         response = seeded.get("/export/download", params={"tag": "sqlite"})
@@ -1871,3 +2224,175 @@ class TestFormContracts:
                 f"{sorted(fields)}, which that route rejects as invalid: "
                 f"{response.text[:200]}"
             )
+
+
+class TestSemanticSearch:
+    """The web's half of semantic search: the toggle and what it says.
+
+    The ranking itself is tested in tests/test_ml_search.py and the CLI's
+    wiring in tests/test_cli.py; these are the adapter's own concerns.
+    """
+
+    @staticmethod
+    def _embed(tmp_path: Path, bodies: dict[int, list[float]]) -> None:
+        """Write vectors straight into the store, no model involved."""
+        from hashline.ml.embed import embedding_key, pack_vector
+
+        with Store.open(tmp_path / "hashline.db") as store:
+            for note_id, vector in bodies.items():
+                store.upsert_embedding(
+                    note_id,
+                    model=embedding_key(),
+                    vector=pack_vector(np.array(vector, dtype=np.float32)),
+                    dim=len(vector),
+                )
+
+    def test_the_search_form_offers_the_toggle(self, client: TestClient) -> None:
+        assert 'name="semantic"' in client.get("/").text
+
+    def test_a_missing_extra_says_so_instead_of_no_matches(
+        self, seeded: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty result alone would blame the notes for a missing library."""
+        monkeypatch.setattr("hashline.ml.embed.is_available", lambda: False)
+        body = seeded.get("/notes", params={"q": "bm25", "semantic": "true"}).text
+        assert "uv sync --extra ml" in body
+        assert 'class="notice"' in body
+
+    def test_an_empty_index_says_indexing_is_running(
+        self, seeded: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("hashline.ml.embed.is_available", lambda: True)
+        body = seeded.get("/notes", params={"q": "bm25", "semantic": "true"}).text
+        assert "indexing" in body.lower()
+        assert 'class="notice"' in body
+
+    def test_it_ranks_by_the_stored_vectors(
+        self, seeded: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A note the keyword index cannot reach still comes back.
+
+        "無関係なメモ" contains no part of the query, so plain search never
+        returns it. Its vector is the query's nearest, so the semantic ranking
+        does -- which is the whole reason the toggle exists. The keyword hit
+        still leads, because it is the one note both rankers agree on.
+        """
+        monkeypatch.setattr("hashline.ml.embed.is_available", lambda: True)
+        monkeypatch.setattr(
+            "hashline.ml.embed.load_model", lambda name=None: _FakeEmbedder([0.0, 1.0])
+        )
+        self._embed(tmp_path, {1: [1.0, 0.0], 2: [0.0, 1.0]})
+        plain = seeded.get("/notes", params={"q": "bm25"}).text
+        assert "無関係なメモ" not in plain
+
+        body = seeded.get("/notes", params={"q": "bm25", "semantic": "true"}).text
+        assert "無関係なメモ" in body
+        assert body.index("bm25 を調べた") < body.index("無関係なメモ")
+
+    def test_a_half_indexed_library_says_how_much_is_left(
+        self, seeded: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A short answer with no explanation reads as "there is nothing else"."""
+        monkeypatch.setattr("hashline.ml.embed.is_available", lambda: True)
+        monkeypatch.setattr(
+            "hashline.ml.embed.load_model", lambda name=None: _FakeEmbedder([1.0, 0.0])
+        )
+        self._embed(tmp_path, {1: [1.0, 0.0]})
+        body = seeded.get("/notes", params={"q": "bm25", "semantic": "true"}).text
+        assert "1 notes are still being indexed" in body
+
+    def test_the_toggle_survives_capturing_a_note(
+        self, seeded: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every control that redraws the timeline has to carry the mode.
+
+        Otherwise adding a note while a semantic search is on silently drops
+        back to keyword results, with the checkbox still ticked.
+        """
+        monkeypatch.setattr("hashline.ml.embed.is_available", lambda: True)
+        monkeypatch.setattr(
+            "hashline.ml.embed.load_model", lambda name=None: _FakeEmbedder([1.0, 0.0])
+        )
+        self._embed(tmp_path, {1: [1.0, 0.0], 2: [0.0, 1.0]})
+        response = seeded.post(
+            "/notes", data={"body": "another", "q": "bm25", "semantic": "true"}
+        )
+        assert response.status_code == 200
+        assert "1 notes are still being indexed" in response.text
+
+    def test_a_plain_search_never_touches_the_backend(
+        self, seeded: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def explode(name: str = "") -> object:
+            raise AssertionError("the keyword path loaded an embedding model")
+
+        monkeypatch.setattr("hashline.ml.embed.load_model", explode)
+        assert seeded.get("/notes", params={"q": "bm25"}).status_code == 200
+
+
+class TestStartupIndexing:
+    """Indexing runs at startup so the web never needs the CLI.
+
+    Three gates stop it from touching a model; each is tested because the
+    default test run has the extra installed on the author's machine and not
+    in CI, and both have to stay quiet.
+    """
+
+    def test_no_index_env_skips_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from hashline.web import app as web_app
+
+        monkeypatch.setenv("HASHLINE_NO_INDEX", "1")
+        monkeypatch.setattr(
+            "hashline.ml.hybrid.is_available", lambda: _fail("checked availability")
+        )
+        web_app._index_in_background()  # must return before the gate below
+
+    def test_an_empty_database_needs_no_model(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hashline.web import app as web_app
+
+        monkeypatch.delenv("HASHLINE_NO_INDEX", raising=False)
+        monkeypatch.setenv("HASHLINE_DB", str(tmp_path / "hashline.db"))
+        monkeypatch.setattr("hashline.ml.hybrid.is_available", lambda: True)
+        monkeypatch.setattr(
+            "hashline.ml.hybrid.index_pending",
+            lambda *a, **k: _fail("embedded an empty database"),
+        )
+        web_app._index_in_background()
+
+    def test_a_failure_does_not_take_the_app_down(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Serving notes must not depend on an optional model working."""
+        from hashline.web import app as web_app
+
+        monkeypatch.delenv("HASHLINE_NO_INDEX", raising=False)
+        monkeypatch.setenv("HASHLINE_DB", str(tmp_path / "hashline.db"))
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("something to embed")
+        monkeypatch.setattr("hashline.ml.hybrid.is_available", lambda: True)
+
+        def boom(*args: object, **kwargs: object) -> int:
+            raise RuntimeError("model exploded")
+
+        monkeypatch.setattr("hashline.ml.hybrid.index_pending", boom)
+        web_app._index_in_background()  # raising here would kill the server
+
+    def test_it_embeds_what_is_pending(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hashline.ml.embed import embedding_key
+        from hashline.web import app as web_app
+
+        monkeypatch.delenv("HASHLINE_NO_INDEX", raising=False)
+        monkeypatch.setenv("HASHLINE_DB", str(tmp_path / "hashline.db"))
+        with Store.open(tmp_path / "hashline.db") as store:
+            store.add_note("something to embed")
+        monkeypatch.setattr("hashline.ml.hybrid.is_available", lambda: True)
+        monkeypatch.setattr(
+            "hashline.ml.embed.load_model", lambda name=None: _FakeEmbedder([1.0, 0.0])
+        )
+        web_app._index_in_background()
+        with Store.open(tmp_path / "hashline.db") as store:
+            assert len(list(store.iter_embeddings(embedding_key()))) == 1

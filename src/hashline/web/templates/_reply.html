@@ -9,12 +9,16 @@
   {% if roots_only %}
     <input type="hidden" name="roots_only" value="true">
   {% endif %}
+  {# Omitted rather than sent empty: an empty string is not a bool. #}
+  {% if semantic %}<input type="hidden" name="semantic" value="true">{% endif %}
   <input type="hidden" name="limit" value="{{ limit }}">
-  <input type="text" name="body" placeholder="reply..." autofocus>
+  <textarea name="body" rows="2" placeholder="reply... (Ctrl+Enter to send, Esc to cancel)" autofocus
+            onkeydown="if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault(); this.form.requestSubmit();} else if(event.key==='Escape'){this.form.remove();}"></textarea>
   <input type="text" name="tags" placeholder="tags">
   {% if pinned_citekey %}
     <input type="text" name="page" placeholder="page">
   {% endif %}
   <label><input type="checkbox" name="no_context"> no context</label>
   <button type="submit">reply</button>
+  <button type="button" onclick="this.closest('form').remove()">cancel</button>
 </form>

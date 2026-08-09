@@ -35,11 +35,14 @@
 
       <div style="display: flex; gap: 1rem; align-items: center;">
         <div>
-          <label style="display: block; margin-bottom: .25rem; font-weight: bold;">Mode</label>
+          <label style="display: block; margin-bottom: .25rem; font-weight: bold;">階層の作り方</label>
+          {# Named by what each mode does, not by its internal name: the whole
+             question a user has here is which part of their file becomes the
+             hierarchy. #}
           <select name="mode" style="padding: .4rem;">
-            <option value="line">line</option>
-            <option value="heading">heading</option>
-            <option value="outline">outline</option>
+            <option value="line">1 行 1 メモ（階層なし）</option>
+            <option value="heading"># の見出しで階層化</option>
+            <option value="outline">- の箇条書きで階層化</option>
           </select>
         </div>
         <div>

@@ -8,20 +8,18 @@
       <table style="width: 100%; border-collapse: collapse; text-align: left;">
         <thead>
           <tr style="border-bottom: 1px solid var(--line);">
-            <th style="padding: 0.5rem;">Citekey</th>
-            <th style="padding: 0.5rem;">Year</th>
             <th style="padding: 0.5rem;">Title</th>
             <th style="padding: 0.5rem;">Author</th>
+            <th style="padding: 0.5rem;">Year</th>
             <th style="padding: 0.5rem;"></th>
           </tr>
         </thead>
         <tbody>
           {% for entry in entries %}
             <tr style="border-bottom: 1px solid var(--line);">
-              <td style="padding: 0.5rem;"><a href="/bib/{{ entry.citekey }}">{{ entry.citekey }}</a></td>
-              <td style="padding: 0.5rem;">{{ entry.year or '----' }}</td>
-              <td style="padding: 0.5rem;">{{ entry.title or '(no title)' }}</td>
+              <td style="padding: 0.5rem;"><a href="/bib/{{ entry.citekey }}">{{ entry.title or '(no title)' }}</a></td>
               <td style="padding: 0.5rem;">{{ entry.author or '-' }}</td>
+              <td style="padding: 0.5rem;">{{ entry.year or '----' }}</td>
               <td style="padding: 0.5rem;">
                 <form hx-post="/context/read" hx-target="#context-strip" hx-swap="outerHTML" style="margin: 0;">
                   <input type="hidden" name="context_citekey" value="{{ entry.citekey }}">

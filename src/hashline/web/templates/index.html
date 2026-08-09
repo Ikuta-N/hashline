@@ -22,9 +22,10 @@
         hx-post="/notes"
         hx-target="#timeline"
         hx-swap="outerHTML"
-        hx-include="[name='q'], [name='tag'], [name='citekey'], [name='roots_only'], [name='limit']"
+        hx-include="[name='q'], [name='tag'], [name='citekey'], [name='roots_only'], [name='limit'], [name='semantic']"
         hx-on::after-request="this.reset()">
-    <input type="text" name="body" placeholder="一行で。#タグ もそのまま書く" autofocus>
+    <textarea name="body" rows="2" placeholder="一行で。#タグ もそのまま書く（Ctrl+Enter で追加）" autofocus
+              onkeydown="if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault(); this.form.requestSubmit();}"></textarea>
     <input type="text" name="tags" placeholder="tags">
     {% if pinned_citekey %}
       <input type="text" name="page" placeholder="page">
@@ -41,16 +42,24 @@
            hx-target="#timeline"
            hx-swap="outerHTML"
            hx-trigger="input changed delay:250ms, search"
-           hx-include="[name='tag'], [name='citekey'], [name='roots_only'], [name='limit']">
+           hx-include="[name='tag'], [name='citekey'], [name='roots_only'], [name='limit'], [name='semantic']">
     <input type="hidden" name="tag" value="{{ tag }}">
     <input type="hidden" name="citekey" value="{{ citekey }}">
     <input type="hidden" name="limit" value="{{ limit }}">
+    <label title="意味の近いメモも探す（キーワード順位と混ぜて並べ替えます）">
+      <input type="checkbox" name="semantic" value="true" {% if semantic %}checked{% endif %}
+             hx-get="/notes"
+             hx-target="#timeline"
+             hx-swap="outerHTML"
+             hx-include="[name='q'], [name='tag'], [name='citekey'], [name='roots_only'], [name='limit']">
+      semantic
+    </label>
     <label title="Search ignores roots_only">
       <input type="checkbox" name="roots_only" value="true" {% if roots_only %}checked{% endif %} {% if q %}disabled{% endif %}
              hx-get="/notes"
              hx-target="#timeline"
              hx-swap="outerHTML"
-             hx-include="[name='q'], [name='tag'], [name='citekey'], [name='limit']">
+             hx-include="[name='q'], [name='tag'], [name='citekey'], [name='limit'], [name='semantic']">
       hide replies
     </label>
   </form>
@@ -61,14 +70,6 @@
     <a href="{{ filter_link(tag=tag, q=q, roots_only=roots_only, limit=limit) }}" class="on">citekey: {{ citekey }} ✕</a>
   </nav>
   {% endif %}
-
-  <nav class="tags">
-    <a href="{{ filter_link(q=q, citekey=citekey, roots_only=roots_only, limit=limit) }}" class="{{ 'on' if not tag }}">all</a>
-    {% for entry in tags %}
-      <a href="{{ filter_link(tag=entry.name, q=q, citekey=citekey, roots_only=roots_only, limit=limit) }}"
-         class="{{ 'on' if entry.name == tag }}">#{{ entry.name }} {{ entry.count }}</a>
-    {% endfor %}
-  </nav>
 
   {% include "_timeline.html" %}
 {% endblock %}
