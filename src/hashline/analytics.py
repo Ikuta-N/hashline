@@ -7,8 +7,10 @@ over time, tag trends, reading and thread summaries. It sits where
 ``hashline.ml.hybrid`` sits -- above the core, below the adapters -- and reads
 a :class:`~hashline.store.Store` through its public API only.
 
-``pandas`` costs about 240 ms to import, next to about 40 ms for the rest of
-the app, so it must never load on a path someone takes to capture a note.
+``pandas`` costs roughly six times as much to import as the whole rest of the
+app (~230 ms against ~40 ms; the README's "Why pandas is used for reporting and
+not for storage" holds the measurements and how to reproduce them), so it must
+never load on a path someone takes to capture a note.
 Every function here imports pandas inside its own body, never at module
 level -- copy this shape from ``hashline.ml.embed``, which does the same for
 ``sentence_transformers``. ``tests/test_analytics.py`` asserts that importing

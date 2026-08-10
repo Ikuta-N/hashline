@@ -209,6 +209,7 @@ The Web UI implements equivalent functionality to the CLI commands:
 | `hashline thread` | `GET /` (with root filter) |
 | `hashline search` | `GET /` (with q) |
 | `hashline pin` | `POST /context/pin`, `POST /context/clear_tags` |
+| `hashline pin --clear`, `hashline read stop` | `POST /context/clear` (unpins both) |
 | `hashline read` | `POST /context/read`, `POST /context/clear_read` |
 | `hashline bib list` | `GET /bib` |
 | `hashline bib show` | `GET /bib/{citekey}` |
@@ -331,8 +332,17 @@ with pandas instead of SQL. It was measured rather than argued:
 | | |
 |---|---|
 | `import hashline.cli` — the whole app, Typer included | **~40 ms** |
-| `import pandas` alone | **~220 ms** |
-| `hashline list`, end to end | 0.06 s |
+| `import pandas` alone | **~230 ms** |
+| `hashline list`, end to end | 0.06–0.07 s |
+
+Measured on one machine with `python -X importtime` and `time`, warm cache,
+median of five runs; the import figures ranged 37–41 ms and 208–238 ms, and a
+first import in a cold process tree measured 447 ms. Reproduce with:
+
+```bash
+uv run python -X importtime -c "import pandas" 2>&1 | tail -1
+uv run python -X importtime -c "import hashline.cli" 2>&1 | tail -1
+```
 
 pandas on the everyday path would multiply the cost of capturing a one-line
 note several times over, for a workload — insert one row, read a few — that a

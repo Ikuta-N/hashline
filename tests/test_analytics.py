@@ -1,8 +1,9 @@
 """Tests for hashline.analytics.
 
-pandas costs about 240ms to import versus about 40ms for the rest of the app,
-so the guard tests below are the whole reason this module is designed the way
-it is. See tests/test_ml_search.py for the same pattern applied to
+pandas costs roughly six times as much to import as the whole rest of the app
+(~230 ms against ~40 ms; the README has the measurements), so the guard tests
+below are the whole reason this module is designed the way it is. See
+tests/test_ml_search.py for the same pattern applied to
 torch/sentence_transformers.
 """
 
