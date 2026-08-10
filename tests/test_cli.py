@@ -1059,3 +1059,61 @@ class TestImplicitAdd:
         assert result.exit_code == 0
         assert "Usage:" in result.output
 
+
+class TestServe:
+    """`hashline` with no command opens the web UI."""
+
+    @pytest.fixture
+    def calls(self, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+        """Record what `serve` would hand uvicorn, without binding a port."""
+        import uvicorn
+
+        recorded: list[dict[str, object]] = []
+
+        def fake_run(target: str, **kwargs: object) -> None:
+            recorded.append({"target": target, **kwargs})
+
+        monkeypatch.setattr(uvicorn, "run", fake_run)
+        # Registered with monkeypatch so that _run_server's write is undone.
+        monkeypatch.setenv("HASHLINE_DB", "")
+        return recorded
+
+    def test_no_command_opens_the_web_ui(
+        self, db: Path, calls: list[dict[str, object]]
+    ) -> None:
+        result = runner.invoke(app, ["--db", str(db)])
+        assert result.exit_code == 0, result.output
+        assert calls == [
+            {
+                "target": "hashline.web.app:app",
+                "host": "127.0.0.1",
+                "port": 8000,
+                "reload": False,
+            }
+        ]
+
+    def test_serve_passes_its_options_through(
+        self, db: Path, calls: list[dict[str, object]]
+    ) -> None:
+        result = runner.invoke(
+            app, ["--db", str(db), "serve", "--port", "9000", "--reload"]
+        )
+        assert result.exit_code == 0, result.output
+        assert calls[0]["port"] == 9000
+        assert calls[0]["reload"] is True
+
+    def test_the_db_option_reaches_the_server(
+        self, db: Path, calls: list[dict[str, object]]
+    ) -> None:
+        """The web adapter resolves the database itself, from the environment."""
+        import os
+
+        runner.invoke(app, ["--db", str(db), "serve"])
+        assert os.environ["HASHLINE_DB"] == str(db)
+
+    def test_the_default_host_is_this_machine(
+        self, db: Path, calls: list[dict[str, object]]
+    ) -> None:
+        """The import routes read the local filesystem; do not offer them around."""
+        runner.invoke(app, ["--db", str(db), "serve"])
+        assert calls[0]["host"] == "127.0.0.1"

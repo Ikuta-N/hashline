@@ -4,6 +4,7 @@ A thin shell over the core: this module owns all filesystem I/O and all
 formatting, and holds no note logic of its own.
 """
 
+import os
 import re
 from collections.abc import Sequence
 from datetime import datetime
@@ -27,6 +28,11 @@ if TYPE_CHECKING:
 
 _BODY_WIDTH: Final = 90
 _WHITESPACE_RE: Final = re.compile(r"\s+")
+
+#: The web UI reads and writes the notes database and its import routes read
+#: the local filesystem, so it is served to this machine only unless asked.
+_DEFAULT_HOST: Final = "127.0.0.1"
+_DEFAULT_PORT: Final = 8000
 
 
 class Mode(StrEnum):
@@ -77,11 +83,12 @@ class _NoteFriendlyGroup(TyperGroup):
 
 app = typer.Typer(
     cls=_NoteFriendlyGroup,
-    no_args_is_help=True,
+    invoke_without_command=True,
+    no_args_is_help=False,
     add_completion=False,
     help=(
         "Local-first micro-notes: one line, inline #hashtags, fast retrieval.\n\n"
-        "`hashline TEXT` writes a note without naming the add command."
+        "`hashline TEXT` writes a note; `hashline` on its own opens the web UI."
     ),
 )
 
@@ -95,6 +102,8 @@ def main(
     ] = None,
 ) -> None:
     ctx.obj = db if db is not None else default_db_path()
+    if ctx.invoked_subcommand is None:
+        _run_server(cast(Path, ctx.obj), host=_DEFAULT_HOST, port=_DEFAULT_PORT)
 
 
 def _open(ctx: typer.Context) -> Store:
@@ -762,6 +771,37 @@ def read_stop(ctx: typer.Context) -> None:
     with _open(ctx) as store:
         store.clear_context()
     typer.echo("context cleared")
+
+
+@app.command()
+def serve(
+    ctx: typer.Context,
+    host: Annotated[
+        str, typer.Option("--host", help="Interface to bind.")
+    ] = _DEFAULT_HOST,
+    port: Annotated[int, typer.Option("--port", "-p", help="Port to bind.")] = (
+        _DEFAULT_PORT
+    ),
+    reload: Annotated[
+        bool, typer.Option("--reload", help="Restart on source changes.")
+    ] = False,
+) -> None:
+    """Open the web UI on the same database. Running `hashline` alone does this."""
+    _run_server(cast(Path, ctx.obj), host=host, port=port, reload=reload)
+
+
+def _run_server(db: Path, *, host: str, port: int, reload: bool = False) -> None:
+    # Imported here rather than at module level: uvicorn pulls in its whole
+    # server stack, and no other command needs it.
+    import uvicorn
+
+    # The web adapter resolves the database itself, through
+    # ``default_db_path()``, so this is how `hashline --db PATH` reaches it.
+    os.environ["HASHLINE_DB"] = str(db)
+    typer.echo(f"hashline on http://{host}:{port}  (Ctrl-C to stop)", err=True)
+    # An import string, not the app object: --reload has nothing to re-import
+    # otherwise.
+    uvicorn.run("hashline.web.app:app", host=host, port=port, reload=reload)
 
 
 def _format_read_status(store: Store) -> str:
