@@ -1117,3 +1117,22 @@ class TestServe:
         """The import routes read the local filesystem; do not offer them around."""
         runner.invoke(app, ["--db", str(db), "serve"])
         assert calls[0]["host"] == "127.0.0.1"
+
+    def test_a_host_off_this_machine_is_called_out(
+        self, db: Path, calls: list[dict[str, object]]
+    ) -> None:
+        """Nothing authenticates and `/import` reads local files.
+
+        The README says not to expose the app, but the person typing
+        `--host 0.0.0.0` is not reading the README at that moment.
+        """
+        result = runner.invoke(app, ["--db", str(db), "serve", "--host", "0.0.0.0"])
+        assert result.exit_code == 0, result.output
+        assert "reachable from other machines" in result.output
+
+    def test_a_loopback_host_is_not_called_out(
+        self, db: Path, calls: list[dict[str, object]]
+    ) -> None:
+        for host in ("127.0.0.1", "::1", "localhost"):
+            result = runner.invoke(app, ["--db", str(db), "serve", "--host", host])
+            assert "reachable from other machines" not in result.output

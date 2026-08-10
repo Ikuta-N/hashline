@@ -4,6 +4,7 @@ A thin shell over the core: this module owns all filesystem I/O and all
 formatting, and holds no note logic of its own.
 """
 
+import ipaddress
 import os
 import re
 from collections.abc import Sequence
@@ -777,7 +778,10 @@ def read_stop(ctx: typer.Context) -> None:
 def serve(
     ctx: typer.Context,
     host: Annotated[
-        str, typer.Option("--host", help="Interface to bind.")
+        str,
+        typer.Option(
+            "--host", help="Interface to bind. Off loopback exposes your files."
+        ),
     ] = _DEFAULT_HOST,
     port: Annotated[int, typer.Option("--port", "-p", help="Port to bind.")] = (
         _DEFAULT_PORT
@@ -790,6 +794,15 @@ def serve(
     _run_server(cast(Path, ctx.obj), host=host, port=port, reload=reload)
 
 
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _run_server(db: Path, *, host: str, port: int, reload: bool = False) -> None:
     # Imported here rather than at module level: uvicorn pulls in its whole
     # server stack, and no other command needs it.
@@ -798,6 +811,16 @@ def _run_server(db: Path, *, host: str, port: int, reload: bool = False) -> None
     # The web adapter resolves the database itself, through
     # ``default_db_path()``, so this is how `hashline --db PATH` reaches it.
     os.environ["HASHLINE_DB"] = str(db)
+    if not _is_loopback(host):
+        # Nothing here authenticates, and `/import` reads any path the server
+        # process can read. Binding wider than this machine hands both to
+        # whoever else is on the network, so say so where it is being done.
+        typer.echo(
+            f"warning: {host} is reachable from other machines. Nothing asks "
+            "for a password, and the import page reads any file this user can "
+            "read.",
+            err=True,
+        )
     typer.echo(f"hashline on http://{host}:{port}  (Ctrl-C to stop)", err=True)
     # An import string, not the app object: --reload has nothing to re-import
     # otherwise.
