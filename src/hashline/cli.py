@@ -4,6 +4,7 @@ A thin shell over the core: this module owns all filesystem I/O and all
 formatting, and holds no note logic of its own.
 """
 
+import ipaddress
 import os
 import re
 from collections.abc import Sequence
@@ -777,17 +778,29 @@ def read_stop(ctx: typer.Context) -> None:
 def serve(
     ctx: typer.Context,
     host: Annotated[
-        str, typer.Option("--host", help="Interface to bind.")
+        str,
+        typer.Option(
+            "--host", help="Interface to bind. Off loopback exposes your files."
+        ),
     ] = _DEFAULT_HOST,
     port: Annotated[int, typer.Option("--port", "-p", help="Port to bind.")] = (
         _DEFAULT_PORT
     ),
     reload: Annotated[
-        bool, typer.Option("--reload", help="Restart on source changes.")
+        bool, typer.Option("--reload", help="Restart when hashline's own code changes.")
     ] = False,
 ) -> None:
     """Open the web UI on the same database. Running `hashline` alone does this."""
     _run_server(cast(Path, ctx.obj), host=host, port=port, reload=reload)
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _run_server(db: Path, *, host: str, port: int, reload: bool = False) -> None:
@@ -798,10 +811,31 @@ def _run_server(db: Path, *, host: str, port: int, reload: bool = False) -> None
     # The web adapter resolves the database itself, through
     # ``default_db_path()``, so this is how `hashline --db PATH` reaches it.
     os.environ["HASHLINE_DB"] = str(db)
+    if not _is_loopback(host):
+        # Nothing here authenticates, and `/import` reads any path the server
+        # process can read. Binding wider than this machine hands both to
+        # whoever else is on the network, so say so where it is being done.
+        typer.echo(
+            f"warning: {host} is reachable from other machines. Nothing asks "
+            "for a password, and the import page reads any file this user can "
+            "read.",
+            err=True,
+        )
     typer.echo(f"hashline on http://{host}:{port}  (Ctrl-C to stop)", err=True)
+    # uvicorn watches the working directory by default, which is wherever the
+    # notes are, not where hashline is installed -- and an installed copy is
+    # never under it. Watch the package instead. Left None without --reload,
+    # which uvicorn would otherwise warn about.
+    reload_dirs = [str(Path(__file__).parent)] if reload else None
     # An import string, not the app object: --reload has nothing to re-import
     # otherwise.
-    uvicorn.run("hashline.web.app:app", host=host, port=port, reload=reload)
+    uvicorn.run(
+        "hashline.web.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+        reload_dirs=reload_dirs,
+    )
 
 
 def _format_read_status(store: Store) -> str:
