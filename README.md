@@ -2,27 +2,34 @@
 
 [![CI](https://github.com/Ikuta-N/hashline/actions/workflows/ci.yml/badge.svg)](https://github.com/Ikuta-N/hashline/actions/workflows/ci.yml)
 
-Local-first micro-notes. Capture a thought in one line, tag it with inline
-`#hashtags`, retrieve it later by tag or full-text search.
+思いついたことを **一行** で書き捨て、あとから引き出すためのメモアプリ。
+タイトルもフォルダもエディタも要らず、本文に書いた `#hashtag` がそのまま
+タグになる。取り出し方はタグ・全文検索・意味検索の 3 通り。
 
-Everything lives in one SQLite file on your machine. Nothing is uploaded.
+データはすべて手元の SQLite ファイル 1 つに入る。どこにも送信しない。
 
-![A hashline session: capture, list, keyword search, then a semantic search
-finding a note that shares no characters with the query](docs/cli-session.png)
+![hashline のセッション: ノートの記録、一覧、全文検索、そして最後に、
+クエリと 1 文字も共有しないノートを見つける意味検索](docs/cli-session.png)
 
-- **One line in, one note out.** No titles, no folders, no editor.
-- **Tags come from the text.** Write `#sqlite` in the note and it is tagged.
-- **Search that works in Japanese.** The FTS5 index uses the trigram
-  tokenizer, so `全文検索` matches without any word segmentation.
-- **Bulk import.** Point it at a directory of `.md` / `.txt` files and every
-  line, or every Markdown section, becomes a note.
-- **Reading mode.** Pin a BibTeX reference while reading; captured notes automatically carry the citekey tag and page number.
-- **Replies and threads.** Reply to notes to build threads and structured note trees.
-- **Markdown round-trip.** Export note trees as indented Markdown outlines, or import outline files back into notes.
+## できること
 
-## Install
+- **一行入れて、一件出す。** 記録も取り出しもコマンド 1 つ。
+- **タグは本文から取る。** ノートに `#sqlite` と書けばタグが付く。
+- **日本語で引ける全文検索。** FTS5 の trigram トークナイザを使うので、
+  分かち書きなしに `全文検索` が一致する。
+- **意味で引ける検索（任意）。** 「眠れない」で「昨日は寝不足で頭が回らな
+  かった」を見つける。
+- **まとめて取り込む。** `.md` / `.txt` のディレクトリを指すと、各行あるいは
+  Markdown の各セクションがノートになる。
+- **読書モードと引用。** 文献をピン留めして読むと、記録したノートに引用
+  キーのタグとページ番号が自動で付く。
+- **返信とスレッド。** ノートに返信して木構造を作り、Markdown アウトライン
+  として書き出せる。
+- **Web UI。** CLI と同じデータベースをブラウザからも扱える。
 
-Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
+## インストール
+
+Python 3.12 と [uv](https://docs.astral.sh/uv/) が要る。
 
 ```bash
 git clone https://github.com/Ikuta-N/hashline.git
@@ -30,153 +37,30 @@ cd hashline
 uv sync
 ```
 
-## Quick start
+## 使ってみる
 
 ```bash
-# capture
+# 記録する
 uv run hashline add "FTS5 の bm25 を調べた #sqlite #検索"
 
-# read back, newest first
+# 読み返す（新しい順）
 uv run hashline list
 uv run hashline list --tag sqlite
 
-# full-text search, best match first
-uv run hashline search "bm25"
-
-# what tags do I use?
-uv run hashline tags
-
-# import a pile of files
-uv run hashline import ~/notes --mode heading --tag imported
+# 全文検索（一致度の高い順）
+uv run hashline search bm25
 ```
 
-Every command takes `--db PATH`. Without it the database is `$HASHLINE_DB`,
-and failing that `~/.local/share/hashline/hashline.db`.
-
-## Working with notes
-
-Beyond the commands in the quick start, the CLI can bulk-import files, run a
-citation-aware reading workflow, keep tags pinned across captures, and build
-reply threads.
-
-### `import`
-
 ```
-hashline import PATH... [--mode line|heading|outline] [--tag NAME] [--dry-run]
+    1  2026-08-10 13:38  FTS5 の bm25 を調べた #sqlite #検索  [sqlite, 検索]
 ```
 
-The mode decides which part of the file becomes the hierarchy.
+データベースの場所は `--db PATH` で指定する。指定がなければ `$HASHLINE_DB`、
+それも無ければ `~/.local/share/hashline/hashline.db` を使う。
 
-- `--mode line` (default) makes one note per non-blank line. No hierarchy.
-- `--mode heading` makes one note per Markdown section — a heading plus the
-  lines under it — **nested by heading level**, so `##` under `#` becomes its
-  reply and a later `##` is its sibling. Levels are ranked, not counted: a
-  document that jumps from `#` to `###` describes two levels, not three. Text
-  before the first heading is kept as its own root, and a `#` inside a fenced
-  code block does not start a section.
-- `--mode outline` nests by bullet indentation, matching the format produced by
-  `hashline export`.
-- `--tag NAME` is repeatable and tags every note from that run. It is stored as
-  a tag only: **the note body is left exactly as written**, so `--tag` names do
-  not turn up in full-text search results.
-- Directories are walked recursively for `.md`, `.markdown` and `.txt`. A file
-  named directly on the command line is read whatever it is called.
-- `--dry-run` reports what would be imported and writes nothing.
-
-### Reading notes
-
-Pin a bibliography entry while reading to automatically tag and cite captured notes:
-
-```bash
-# import bibliography entries from a .bib file
-uv run hashline bib import library.bib [--replace]
-uv run hashline bib list
-uv run hashline bib show smith2020
-
-# pin a work to start reading mode
-uv run hashline read start smith2020 [--tag NAME]
-uv run hashline read status
-
-# capture notes with page numbers (carried into context automatically)
-uv run hashline add "Trigram indexing is fast for short queries #notes" --page 12-15
-
-# filter notes by citation key
-uv run hashline list --citekey smith2020
-
-# stop reading mode
-uv run hashline read stop
-```
-
-Things worth knowing:
-- `read status` reports the pinned **work**. If only plain tags are pinned via `pin`, `read status` says nothing is pinned — use `pin --show` for those.
-- A note captured under a reading context receives both the reading tag (`#reading` by default, or custom `--tag NAME`) and the work's citekey tag (e.g. `#smith2020`).
-- `--page` is a free-form string (`"42"`, `"12-15"`, `"xii"`, `"第3章"`) and there is therefore no page ordering or range search.
-- `--page` without a pinned work is an error, not a silent no-op.
-- LaTeX escapes in `.bib` values are stored as written; `{\"o}` is not turned into `ö`.
-- The BibTeX parser skips an entry it cannot read and reports it, rather than failing the whole import.
-
-### Pinned tags
-
-Pin tags across multiple `add` invocations without repeating them:
-
-```bash
-# pin tags for subsequent notes
-uv run hashline pin research sqlite
-
-# check currently pinned tags
-uv run hashline pin --show
-
-# capture a note (receives #research and #sqlite tags automatically)
-uv run hashline add "Investigating indexing performance"
-
-# clear pinned tags
-uv run hashline pin --clear
-```
-
-Like `import --tag`, `hashline pin` tags without touching the body, so pinned tag names do not turn up in full-text search results.
-
-### Replies and outlines
-
-Notes can reply to existing notes, forming threads and tree structures:
-
-```bash
-# reply to a note ID to build a thread
-uv run hashline reply 1 "Sub-point about implementation"
-
-# view a thread indented by depth
-uv run hashline thread 1
-
-# list timeline hiding replies
-uv run hashline list --roots-only
-
-# delete a note (refuses if it has replies unless --recursive is passed)
-uv run hashline rm 1 [--recursive]
-
-# export notes as a Markdown outline
-uv run hashline export [--tag X] [--citekey Y] [--root ID] [-o FILE]
-
-# import an outline file back into note trees
-uv run hashline import PATH --mode outline
-```
-
-Things worth knowing:
-- `rm` refuses a note that has replies; `--recursive` removes the thread.
-- `export` promotes a note whose parent is outside the selection to a root, so filtering never makes replies disappear.
-- There is no reparenting: restructuring means deleting and re-entering.
-
-### Search
-
-- Results are ranked by BM25 and printed best-first. The score shown is
-  `-bm25()`, so **higher is better**. On a very small database the score can
-  legitimately be `0.00`: BM25 gives no weight to a term that appears in about
-  half the notes.
-- A trigram index cannot answer queries shorter than three characters, so those
-  fall back to a substring scan, come back newest-first, and score `0.00`.
-- The whole query is treated as literal text. `#`, `-`, `*` and `"` are
-  searched for, not interpreted as operators.
-- `--semantic` blends in a ranking by meaning; see
-  [Semantic search](#semantic-search). It needs the `ml` extra and an index
-  pass, and says which is missing rather than answering with nothing.
+ほかに、まとめて取り込む `import`、読書モードの `bib` / `read`、タグの
+ピン留め `pin`、返信の `reply` / `thread`、書き出しの `export`、集計の
+`stats` がある。→ [CLI リファレンス](docs/cli.md)
 
 ## Web UI
 
@@ -185,59 +69,24 @@ uv run uvicorn hashline.web.app:app --reload
 # http://127.0.0.1:8000
 ```
 
-![The hashline web UI: the pinned-context strip, a multi-line composer, the
-semantic toggle, and a Markdown document imported as a nested
-chapter/section/subsection thread](docs/web-ui.png)
+![hashline の Web UI: コンテキスト帯、複数行の入力欄、semantic トグル、
+そして章・節・項の入れ子として取り込まれた Markdown 文書](docs/web-ui.png)
 
-Capture, filtering and search-as-you-type over the same database the CLI uses;
-it honours `$HASHLINE_DB`. HTMX is vendored under
-`src/hashline/web/static/`, so the page needs no CDN and works offline. The
-vendored build is htmx 2.0.4 (`htmx.min.js`, ~50 KB), licensed 0BSD, which
-carries no attribution requirement — update the file by hand when a new
-version is needed.
+CLI と同じデータベース（`$HASHLINE_DB` を尊重する）に対して、記録・絞り込
+み・打ちながらの検索ができる。CLI との対応表は
+[設計メモ](docs/design.md#web-ui-と-cli-の対応)。
 
-### Feature Parity
+> **注意:** `/import` と `/bib/import` の `path` 欄は、サーバを動かしている
+> マシンのファイルシステムを直接読む。このアプリをネットワークに公開しない
+> こと。
 
-The Web UI implements equivalent functionality to the CLI commands:
+## 意味検索（任意）
 
-| CLI command | Web UI route |
-|---|---|
-| `hashline list` | `GET /` |
-| `hashline add` | `POST /notes` |
-| `hashline rm` | `POST /notes/{id}/delete` |
-| `hashline reply` | `POST /notes` (with parent_id) |
-| `hashline thread` | `GET /` (with root filter) |
-| `hashline search` | `GET /` (with q) |
-| `hashline pin` | `POST /context/pin`, `POST /context/clear_tags` |
-| `hashline pin --clear`, `hashline read stop` | `POST /context/clear` (unpins both) |
-| `hashline read` | `POST /context/read`, `POST /context/clear_read` |
-| `hashline bib list` | `GET /bib` |
-| `hashline bib show` | `GET /bib/{citekey}` |
-| `hashline import` | `POST /import` (also supports browser uploads) |
-| `hashline bib import` | `POST /bib/import` (also supports browser uploads) |
-| `hashline export` | `GET /export`, `GET /export/download` |
-| `hashline index` | runs by itself, at startup and after each write |
-| `hashline tags` | *CLI only* |
-| `hashline search --semantic` | the **semantic** toggle beside the search box |
-| `hashline stats` | `GET /stats` |
-
-Filtering by a tag works in the browser — `/?tag=NAME`, and every control
-carries the filter — but **listing the tags you use is CLI only**. The chips
-that used to sit under the search box grew without bound as tags accumulated,
-so they were removed rather than paginated.
-
-One deliberate difference: `hashline read start` replaces the pinned tags, while `POST /context/read` adds the reading tag to them. The context strip shows the pinned tags and the pinned work side by side with a clear button each, so starting a read there should not empty the column next to it.
-
-> **Security Note:** The `path` field in both `/import` and `/bib/import` reads files directly from the local filesystem on the machine running the server. Do not expose this web app to a network. All state-changing routes also reject a POST whose `Origin` header does not match the server's own host, so a form on another site left open in the same browser cannot delete notes or replace the bibliography; a request with no `Origin` header (curl, the CLI) is still allowed through.
-
-## Semantic search
-
-Retrieve notes by meaning, not only by the characters in them. Optional: the
-app installs, starts and works fully without it.
+文字ではなく意味でノートを引く。入れなくてもアプリは問題なく動く。
 
 ```bash
-uv sync --extra ml            # torch (CPU build) and sentence-transformers
-uv run hashline index         # embed every note not embedded yet
+uv sync --extra ml            # torch（CPU ビルド）と sentence-transformers
+uv run hashline index         # 未埋め込みのノートを埋め込む
 uv run hashline search 眠れない --semantic
 ```
 
@@ -246,184 +95,38 @@ uv run hashline search 眠れない --semantic
 0.0161      3  2026-08-09 22:45  朝の散歩を習慣にしたい #日記          [日記]
 ```
 
-Neither note contains 眠れない, so `hashline search 眠れない` on its own finds
-nothing — which is the last pair of commands in the session at the top of this
-file.
+どちらのノートにも「眠れない」という文字列は無い。Web UI では検索ボックス
+横の **semantic** トグルにあたり、埋め込みはサーバが自動で行う。
+仕組みと保存形式は [意味検索](docs/semantic-search.md)。
 
-In the web UI it is the **semantic** checkbox beside the search box, and there
-is nothing to run first: the server embeds whatever is unembedded in a
-background thread when it starts **and again after every note you write**, so a
-note captured in the browser becomes searchable by meaning without a restart.
-One pass runs at a time and keeps looking until nothing is left, so a bulk
-import does not start a thread per note. Set `HASHLINE_NO_INDEX=1` to switch it
-off — the page then says notes are *not indexed* rather than claiming a pass is
-under way. Without the extra installed the toggle says so instead of returning
-nothing.
-
-`hashline index` walks `notes_without_embedding`, so re-running it costs
-nothing; `--rebuild` re-embeds everything and `--limit` stops early. A search
-that finds notes added since the last index says how many are missing rather
-than leaving a short result list as the only clue.
-
-### How the two rankings are combined
-
-BM25 and cosine similarity are on unrelated scales, so the **ranks** are fused,
-not the scores: each list contributes `1 / (60 + rank)` per note
-(reciprocal rank fusion). No normalization constant to tune, and a third
-ranker could be added without revisiting the first two. Both sides contribute
-their top 100 regardless of `--limit`, so a note that both rankers place 25th
-is not beaten by one that a single ranker happened to put 20th.
-
-### How vectors are stored
-
-The `embeddings` table has been in the schema since the first release, so this needed no migration and no reimport.
-
-- Little-endian `float32`, fixed explicitly, so a `.db` file stays portable between machines.
-- `dim` lives in its own column, not a header inside the BLOB.
-- Vectors are L2-normalized on write.
-- `embeddings.model` records the prefix convention (`intfloat/multilingual-e5-small+query`), not just the model name — e5-small is 384-wide exactly like the MiniLM model it replaced, so no dimension check could catch the two being mixed.
-
-That prefix is e5's: both the note and the search for it are embedded with
-`query: `, because finding notes that mean the same thing as a phrase is a
-symmetric task.
-
-### What runs where
-
-- `ml/search.py` is pure numpy and imports no model runtime.
-- `ml/embed.py` imports the backend inside functions.
-- `ml/protocols.py` defines the `Embedder` protocol both sides share.
-- `ml/hybrid.py` reads vectors out of a store and fuses the two rankings. Both
-  adapters call it, so neither owns a copy of the retrieval logic.
-- Both adapters import all of it inside the functions that need it, so nothing
-  pays for numpy at startup.
-
-## Stats
-
-Aggregate views over the notes you already have: how much you write, which tags
-are moving, which works you have read, and how your threads are shaped.
+## 開発
 
 ```bash
-uv run hashline stats                          # totals and the date range
-uv run hashline stats --activity --freq D      # notes per day
-uv run hashline stats --tags --freq W --top 5  # the five busiest tags, weekly
-uv run hashline stats --reading                # one row per work you have notes on
-uv run hashline stats --threads                # one row per thread root
-uv run hashline stats --tags --csv tags.csv    # the same frame, as a file
-```
-
-```
-                                  title  note_count              first_note_at               last_note_at        pages
-citekey
-smith2020  A Survey of Trigram Indexing           2 2026-08-10 10:56:15.940450 2026-08-10 10:56:16.030477  [12-15, 40]
-```
-
-Pages stay as written (`12-15`, `xii`, `第3章`) — they are collected, never
-parsed into numbers, because a page reference is not arithmetic. On screen
-they show as a list; `--csv` joins them with `;` so the column is parseable.
-
-The same views are in the web UI at `/stats`, with the view, the period and the
-tag count as dropdowns.
-
-### Why pandas is used for reporting and not for storage
-
-The question that produced this layer was whether hashline should manage notes
-with pandas instead of SQL. It was measured rather than argued:
-
-| | |
-|---|---|
-| `import hashline.cli` — the whole app, Typer included | **~40 ms** |
-| `import pandas` alone | **~230 ms** |
-| `hashline list`, end to end | 0.06–0.07 s |
-
-Measured on one machine with `python -X importtime` and `time`, warm cache,
-median of five runs; the import figures ranged 37–41 ms and 208–238 ms, and a
-first import in a cold process tree measured 447 ms. Reproduce with:
-
-```bash
-uv run python -X importtime -c "import pandas" 2>&1 | tail -1
-uv run python -X importtime -c "import hashline.cli" 2>&1 | tail -1
-```
-
-pandas on the everyday path would multiply the cost of capturing a one-line
-note several times over, for a workload — insert one row, read a few — that a
-DataFrame is not better at. Replacing SQLite would also give up the FTS5 index
-and BM25 ranking (pandas has no inverted index), atomic single-row writes,
-concurrent access from the CLI and the web server at once, and foreign-key
-cascades.
-
-So storage and retrieval are untouched, and pandas is used only where it is
-genuinely better than SQL — grouping, resampling, pivoting — and imported
-**inside** the functions that need it. A test asserts that `pandas` is absent
-from `sys.modules` after importing either adapter, because that is the only
-thing standing between this design and a stray top-level import that silently
-slows down every command.
-
-Timestamps print in your timezone, except the resample buckets, which stay UTC:
-a bucket is not an instant, and shifting a UTC day would label it `09:00` for a
-reader nine hours ahead. `--csv` writes UTC throughout, since a CSV is read by
-a program.
-
-## Upgrading
-
-This release carries the project's first schema migrations. An existing database is upgraded in place the next time it is opened, and going back to an older version of `hashline` afterwards will not work.
-
-Before upgrading, it is recommended to copy your database file to back it up. The database location is specified by `$HASHLINE_DB`, or defaults to `~/.local/share/hashline/hashline.db`:
-
-```bash
-cp "${HASHLINE_DB:-$HOME/.local/share/hashline/hashline.db}" ~/hashline.db.bak
-```
-
-## Development
-
-```bash
-uv sync --dev          # dev tools; note this does NOT install the ml extra
+uv sync --dev          # 開発ツール。ml エクストラは入らない
 uv run ruff check .
 uv run mypy src
-uv run pytest
 ```
 
-### Tests
+### テスト
 
 ```bash
-uv run pytest                                     # the default suite
-uv run pytest --cov=src --cov-report=term-missing # with coverage
-uv run pytest -m slow                             # model-dependent tests only
+uv run pytest                                     # 既定のスイート
+uv run pytest --cov=src --cov-report=term-missing # カバレッジ付き
+uv run pytest -m slow                             # モデルを要するテストのみ
 ```
 
-Tests marked `slow` need an embedding model downloaded and are excluded by
-default; CI never runs them. Import fixtures under `tests/fixtures/` are
-synthetic — no real note directory is referenced anywhere in the test suite.
+`slow` を付けたテストは埋め込みモデルのダウンロードを要するため既定では
+除外され、CI でも実行しない。`tests/fixtures/` のインポート用データは
+すべて合成で、実在のノートディレクトリはテストのどこからも参照しない。
 
-CI runs `ruff check .`, `mypy src` and `pytest --cov` on every push and pull
-request.
+CI は push と pull request のたびに `ruff check .`、`mypy src`、
+`pytest --cov` を実行する。
 
-## Layout
+コードの構成と設計判断は [設計メモ](docs/design.md) にまとめてある。
 
-```
-src/hashline/
-  models.py     dataclasses shared by every layer
-  tags.py       #tag extraction (pure functions)
-  store.py      SQLite repository; no web or CLI dependency
-  importer.py   documents -> note drafts (pure functions; no file I/O)
-  bib.py        BibTeX parsing (pure functions; no file I/O)
-  outline.py    Markdown outline building and rendering (pure functions)
-  analytics.py  DataFrames over the store; pandas imported lazily
-  cli.py        Typer adapter; owns all filesystem I/O
-  schema.sql    tables, indexes, FTS5 index and its sync triggers
-  web/app.py       FastAPI + HTMX adapter
-  ml/search.py     ranking maths for semantic search (pure numpy)
-  ml/embed.py      embedding backend behind the optional `ml` extra
-  ml/hybrid.py     semantic retrieval against a store, shared by both adapters
-  ml/protocols.py  the Embedder protocol; numpy and nothing else
-tests/
-```
+## ライセンス
 
-The core (`models`, `tags`, `store`, `importer`, `bib`, `outline`) is plain Python
-over the standard library plus numpy. `analytics` and `ml/hybrid` sit above it —
-they read a store and return values — and the CLI and the web UI are thin
-adapters over all of it.
+MIT。[LICENSE](LICENSE) を参照。
 
-## License
-
-MIT. See [LICENSE](LICENSE).
-
+同梱している htmx 2.0.4（`src/hashline/web/static/htmx.min.js`）は 0BSD で
+配布されており、帰属表示の義務は無い。
