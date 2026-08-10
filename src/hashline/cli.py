@@ -9,9 +9,10 @@ from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Final, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
 import typer
+from typer.core import TyperGroup
 
 from hashline.bib import parse_bibtex
 from hashline.files import read_documents
@@ -36,10 +37,52 @@ class Mode(StrEnum):
     outline = "outline"
 
 
+def _looks_like_a_note(token: str) -> bool:
+    """Would ``hashline TOKEN ...`` be someone writing a note, not a command?
+
+    Only text a command name could never be counts: an option is left to the
+    group, and a lone ASCII word stays a command so that a mistyped
+    ``hashline serach`` is still an error with a suggestion rather than a note
+    nobody meant to write.
+    """
+    if token.startswith("-"):
+        return False
+    return (
+        any(ord(char) > 127 for char in token)
+        or _WHITESPACE_RE.search(token) is not None
+        or token.startswith("#")
+    )
+
+
+class _NoteFriendlyGroup(TyperGroup):
+    """Resolve ``hashline <text>`` as ``hashline add <text>``.
+
+    ``add`` is the command typed most often and the one whose name carries the
+    least information, so text that cannot be a command name goes to it.
+    """
+
+    # ``ctx`` is annotated loosely because Typer vendors its own copy of Click
+    # (``typer._click``); its Context type has no public import path, and
+    # naming click's would not match the base signature.
+    def resolve_command(
+        self, ctx: Any, args: list[str]
+    ) -> tuple[str | None, Any, list[str]]:
+        if args and self.get_command(ctx, args[0]) is None:
+            if _looks_like_a_note(args[0]):
+                # The arguments are passed on untouched, so the text is read as
+                # ``add``'s positional and --tag/--page still apply.
+                return "add", self.get_command(ctx, "add"), args
+        return super().resolve_command(ctx, args)
+
+
 app = typer.Typer(
+    cls=_NoteFriendlyGroup,
     no_args_is_help=True,
     add_completion=False,
-    help="Local-first micro-notes: one line, inline #hashtags, fast retrieval.",
+    help=(
+        "Local-first micro-notes: one line, inline #hashtags, fast retrieval.\n\n"
+        "`hashline TEXT` writes a note without naming the add command."
+    ),
 )
 
 

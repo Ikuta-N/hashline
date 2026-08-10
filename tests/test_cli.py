@@ -1017,3 +1017,45 @@ class TestStatsFreqEdges:
         )
         assert result.exit_code != 0
         assert "freq must be one of" in result.output
+
+
+class TestImplicitAdd:
+    """`hashline TEXT` is `hashline add TEXT`: the note is what gets typed most."""
+
+    def test_japanese_text_becomes_a_note(self, db: Path) -> None:
+        output = run(db, "今日は寝不足だった")
+        assert "今日は寝不足だった" in output
+
+    def test_text_with_spaces_becomes_a_note(self, db: Path) -> None:
+        output = run(db, "bm25 を調べた #sqlite")
+        assert "[sqlite]" in output
+
+    def test_text_starting_with_a_hash_becomes_a_note(self, db: Path) -> None:
+        output = run(db, "#日記 晴れ")
+        assert "[日記]" in output
+
+    def test_the_add_options_still_apply(self, db: Path) -> None:
+        output = run(db, "眠い", "--tag", "体調")
+        assert "[体調]" in output
+
+    def test_a_command_name_is_still_a_command(self, db: Path) -> None:
+        run(db, "add", "a note")
+        assert "a note" in run(db, "list")
+
+    def test_a_mistyped_command_is_an_error_not_a_note(self, db: Path) -> None:
+        """The reason a lone ASCII word is left alone.
+
+        Sending every unknown word to `add` would turn a typo into a note that
+        nobody meant to write, and the mistake would only surface later, in the
+        timeline.
+        """
+        result = runner.invoke(app, ["--db", str(db), "serach"])
+        assert result.exit_code != 0
+        assert "No such command 'serach'" in result.output
+        assert "no notes yet" in run(db, "list")
+
+    def test_an_option_is_left_to_the_group(self, db: Path) -> None:
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "Usage:" in result.output
+
