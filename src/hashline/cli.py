@@ -347,11 +347,16 @@ def stats(
     freq: Annotated[
         str | None,
         typer.Option(
-            "--freq", help="Resample frequency for --activity/--tags: D, W or ME."
+            "--freq",
+            help="Resample frequency for --activity/--tags. D, W or ME; "
+            "defaults to D.",
         ),
     ] = None,
     top: Annotated[
-        int | None, typer.Option("--top", help="How many tags to keep, with --tags.")
+        int | None,
+        typer.Option(
+            "--top", help="How many tags to keep, with --tags. Defaults to 10."
+        ),
     ] = None,
     csv: Annotated[
         Path | None,
@@ -403,13 +408,15 @@ def stats(
     with _open(ctx) as store:
         if activity_flag:
             try:
-                df = analytics.activity(store, freq=freq or "D")
+                df = analytics.activity(store, freq="D" if freq is None else freq)
             except ValueError as exc:
                 raise typer.BadParameter(str(exc)) from exc
         elif tags_flag:
             try:
                 df = analytics.tag_trend(
-                    store, freq=freq or "D", top=10 if top is None else top
+                    store,
+                    freq="D" if freq is None else freq,
+                    top=10 if top is None else top,
                 )
             except ValueError as exc:
                 raise typer.BadParameter(str(exc)) from exc
@@ -514,7 +521,10 @@ def tags(
 ) -> None:
     """List tags in use, most used first."""
     with _open(ctx) as store:
-        counts = store.list_tags(limit=limit)
+        try:
+            counts = store.list_tags(limit=limit)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         if not counts:
             typer.echo("no tags yet")
             return

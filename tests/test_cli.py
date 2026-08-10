@@ -502,11 +502,21 @@ class TestStats:
     def test_an_unusable_top_is_a_bad_parameter_not_a_traceback(
         self, db: Path, top: str
     ) -> None:
-        """`--top -1` used to mean *every tag*: SQLite reads LIMIT -1 as none."""
+        """`--top -1` used to mean *every tag*: SQLite reads LIMIT -1 as none.
+
+        `"Traceback" not in output` cannot express this: CliRunner captures
+        the exception instead of printing it, so an uncaught OverflowError
+        leaves the output EMPTY and a non-zero exit -- both of which that
+        assertion happily accepts. Verified by stubbing the guard out: the
+        test passed with the bug restored. What distinguishes the two is
+        whether an exception escaped at all, and whether the message a user
+        needs actually reached them.
+        """
         run(db, "add", "a #popular")
         result = runner.invoke(app, ["--db", str(db), "stats", "--tags", "--top", top])
         assert result.exit_code != 0
-        assert "Traceback" not in result.output
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "top must be between" in result.output
 
     def test_reading_selector(self, db: Path) -> None:
         run(db, "bib", "import", str(BIB_FIXTURE))
@@ -930,7 +940,7 @@ class TestStatsTimezone:
         not hasattr(time, "tzset"), reason="TZ only takes effect on POSIX"
     )
     def test_a_winter_note_is_not_printed_at_a_summer_offset(
-        self, db: Path, monkeypatch: pytest.MonkeyPatch
+        self, db: Path, monkeypatch: pytest.MonkeyPatch, in_zone: None
     ) -> None:
         """The offset belongs to the timestamp, not to the moment of running.
 
@@ -959,3 +969,51 @@ class TestStatsTimezone:
         """
         run(db, "add", "a note")
         assert "+00:00" in run(db, "stats", "--activity")
+
+
+class TestListTagsLimit:
+    """The cap belongs to the LIMIT, so it is checked where the LIMIT is issued.
+
+    `hashline stats --tags --top` was fixed one call away from this, while
+    `hashline tags --limit` -- the other caller of `Store.list_tags` -- still
+    read `-1` as *every tag* and blew up on a large integer.
+    """
+
+    def test_a_negative_limit_is_refused_not_read_as_no_limit(
+        self, db: Path
+    ) -> None:
+        for index in range(3):
+            run(db, "add", f"note {index} #tag{index}")
+        result = runner.invoke(app, ["--db", str(db), "tags", "--limit", "-1"])
+        assert result.exit_code != 0
+        assert "limit must be between" in result.output
+
+    def test_a_limit_sqlite_cannot_bind_is_refused(self, db: Path) -> None:
+        run(db, "add", "a #tag")
+        result = runner.invoke(
+            app, ["--db", str(db), "tags", "--limit", "99999999999999999999"]
+        )
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "limit must be between" in result.output
+
+    def test_a_usable_limit_still_caps(self, db: Path) -> None:
+        for index in range(3):
+            run(db, "add", f"note {index} #tag{index}")
+        assert len(run(db, "tags", "--limit", "2").splitlines()) == 2
+
+
+class TestStatsFreqEdges:
+    def test_an_empty_freq_is_refused_like_any_other_bad_one(self, db: Path) -> None:
+        """`freq or "D"` read "" as "not given" and printed daily buckets.
+
+        The guard above it asks `is not None`, so an empty string had already
+        been accepted as "the user passed --freq" -- and then silently became
+        the default anyway.
+        """
+        run(db, "add", "a note")
+        result = runner.invoke(
+            app, ["--db", str(db), "stats", "--activity", "--freq", ""]
+        )
+        assert result.exit_code != 0
+        assert "freq must be one of" in result.output

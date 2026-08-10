@@ -1,3 +1,5 @@
+import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,23 @@ def no_background_indexing(monkeypatch: pytest.MonkeyPatch) -> None:
     from hashline.ml.hybrid import forget_models
 
     forget_models()
+
+
+@pytest.fixture
+def in_zone() -> Iterator[None]:
+    """Undo a test's ``TZ`` change in libc as well as in the environment.
+
+    A test that sets ``TZ`` has to call ``time.tzset()`` for it to take
+    effect. monkeypatch then restores the variable, but glibc's
+    ``localtime_r`` -- which is what CPython calls -- does not re-read ``TZ``
+    on its own, so without a second ``tzset()`` the whole process keeps the
+    zone for every test that runs afterwards. Nothing asserts on local time
+    later today; ``hashline list`` and the stats overview are one reordering
+    away from it mattering.
+    """
+    yield
+    if hasattr(time, "tzset"):
+        time.tzset()
 
 
 @pytest.fixture
