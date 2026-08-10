@@ -114,6 +114,25 @@ def _check_freq(freq: str) -> None:
         raise ValueError(f"freq must be one of {sorted(_ALLOWED_FREQ)}, got {freq!r}")
 
 
+#: The largest value SQLite will take as an INTEGER. Past it, the driver
+#: raises `OverflowError`, which is neither a `ValueError` an adapter catches
+#: nor a message anyone can act on.
+_MAX_TOP: int = 2**63 - 1
+
+
+def _check_top(top: int) -> None:
+    """Reject a `top` that SQLite cannot use as a LIMIT.
+
+    Checked here, at the boundary, for the same reason `freq` is: both end up
+    as a query parameter, and the errors SQLite gives back for them are worse
+    than the ones this module can give. Zero and below are not merely useless
+    -- `LIMIT -1` means *no limit* in SQLite, so a negative `top` silently
+    returns every tag and turns the cap into its opposite.
+    """
+    if not 1 <= top <= _MAX_TOP:
+        raise ValueError(f"top must be between 1 and {_MAX_TOP}, got {top}")
+
+
 def activity(store: Store, *, freq: str = "D") -> pd.DataFrame:
     """Notes per period, zero-filled where a period has no notes.
 
@@ -155,9 +174,11 @@ def tag_trend(store: Store, *, freq: str = "W", top: int = 10) -> pd.DataFrame:
     most-used first), so the table stays readable on a library with hundreds
     of tags. A cell is how many notes in that period carried that tag, 0
     rather than missing where none did. ``freq`` is checked exactly as in
-    :func:`activity`.
+    :func:`activity`, and ``top`` must be at least 1 and small enough for
+    SQLite to take as a ``LIMIT``; anything else raises ``ValueError``.
     """
     _check_freq(freq)
+    _check_top(top)
     import pandas as pd
 
     periods = activity(store, freq=freq).index

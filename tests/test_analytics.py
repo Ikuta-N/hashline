@@ -201,6 +201,22 @@ class TestTagTrend:
         with pytest.raises(ValueError, match="freq"):
             analytics.tag_trend(store, freq="M")
 
+    @pytest.mark.parametrize("top", [0, -1, -10])
+    def test_rejects_a_top_below_one(self, store: Store, top: int) -> None:
+        """`LIMIT -1` is SQLite for *no limit*, so this cap inverted itself."""
+        store.add_note("one #a")
+        with pytest.raises(ValueError, match="top"):
+            analytics.tag_trend(store, top=top)
+
+    def test_rejects_a_top_sqlite_cannot_hold(self, store: Store) -> None:
+        """Past 2**63-1 the driver raises OverflowError, which no caller catches."""
+        with pytest.raises(ValueError, match="top"):
+            analytics.tag_trend(store, top=2**63)
+
+    def test_the_largest_usable_top_is_accepted(self, store: Store) -> None:
+        store.add_note("one #a")
+        assert list(analytics.tag_trend(store, top=2**63 - 1).columns) == ["a"]
+
     def test_empty_store_gives_an_empty_frame(self, store: Store) -> None:
         df = analytics.tag_trend(store)
         assert len(df) == 0

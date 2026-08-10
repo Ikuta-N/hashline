@@ -2069,6 +2069,21 @@ class TestStats:
         assert response.status_code == 200
         assert 'class="error"' in response.text
 
+    @pytest.mark.parametrize("top", ["99999999999999999999", "-1", "0"])
+    def test_an_unusable_top_answers_200_with_a_visible_error(
+        self, seeded: TestClient, top: str
+    ) -> None:
+        """A number `int()` accepts but SQLite cannot use is still a 200.
+
+        The route promises to answer 200 whatever it is given, because htmx
+        does not swap a non-2xx response and the page would just sit there.
+        A `top` past SQLite's INTEGER range used to escape as an
+        `OverflowError` -- not a `ValueError` -- and reach the client as a 500.
+        """
+        response = seeded.get("/stats", params={"view": "tags", "top": top})
+        assert response.status_code == 200
+        assert 'class="error"' in response.text
+
     def test_tags_view_lists_the_top_tags_as_columns(self, seeded: TestClient) -> None:
         body = seeded.get("/stats", params={"view": "tags"}).text
         assert "sqlite" in body

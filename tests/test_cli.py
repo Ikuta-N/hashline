@@ -498,6 +498,16 @@ class TestStats:
         assert "popular" in output
         assert "rare" not in output
 
+    @pytest.mark.parametrize("top", ["-1", "0", "99999999999999999999"])
+    def test_an_unusable_top_is_a_bad_parameter_not_a_traceback(
+        self, db: Path, top: str
+    ) -> None:
+        """`--top -1` used to mean *every tag*: SQLite reads LIMIT -1 as none."""
+        run(db, "add", "a #popular")
+        result = runner.invoke(app, ["--db", str(db), "stats", "--tags", "--top", top])
+        assert result.exit_code != 0
+        assert "Traceback" not in result.output
+
     def test_reading_selector(self, db: Path) -> None:
         run(db, "bib", "import", str(BIB_FIXTURE))
         run(db, "read", "start", "smith2020")
