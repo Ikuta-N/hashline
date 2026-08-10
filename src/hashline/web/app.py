@@ -53,20 +53,39 @@ _log: Final = logging.getLogger("uvicorn.error")
 _NO_INDEX_ENV: Final = "HASHLINE_NO_INDEX"
 
 
+#: Guards ``_index_running``. One pass at a time: a bulk import would
+#: otherwise start a thread per note, and they would all fight over the same
+#: rows.
+_index_state: Final = threading.Lock()
+_index_running = False
+
+
+def indexing_enabled() -> bool:
+    """Whether an indexing pass would run if one were scheduled.
+
+    The timeline asks before promising the user that anything is happening.
+    """
+    return not os.environ.get(_NO_INDEX_ENV)
+
+
 def _index_in_background() -> None:
-    """Embed whatever is unembedded, in a thread, at startup.
+    """Embed whatever is unembedded, until nothing is left.
 
     Semantic search needs vectors, and asking the user to remember a CLI
     command is how a feature goes unused. A button would be worse: the first
     run downloads a model, so it would hold a request open for minutes.
 
-    Three gates, any of which ends this without the model being touched: the
-    extra is not installed, nothing is unembedded, or the environment says not
-    to. Nothing here may raise -- an indexing failure must not stop the app
-    from serving notes, which is the part that works without any of this.
+    The loop is what makes this safe to run alongside writes. A note captured
+    after this pass read ``notes_without_embedding`` is invisible to it, so the
+    pass looks again before it gives up -- otherwise, with only one pass
+    allowed at a time, that note would wait for a restart.
+
+    Three gates end this without the model being touched: the extra is not
+    installed, nothing is unembedded, or the environment says not to. Nothing
+    here may raise -- an indexing failure must not stop the app from serving
+    notes, which is the part that works without any of this.
     """
-    if os.environ.get(_NO_INDEX_ENV):
-        return
+    global _index_running
     try:
         from hashline.ml import hybrid
 
@@ -75,28 +94,61 @@ def _index_in_background() -> None:
         # A fresh connection: sqlite3 objects belong to the thread that made
         # them, and this one outlives the request that started it.
         with Store.open(default_db_path()) as store:
-            pending = hybrid.pending_count(store)
-            if not pending:
-                return
-            _log.info("indexing %d notes in the background", pending)
-            done = hybrid.index_pending(
-                store,
-                on_progress=lambda seen, total: _log.info(
-                    "  indexed %d/%d", seen, total
-                ),
-            )
-            _log.info("indexed %d notes", done)
+            while True:
+                pending = hybrid.pending_count(store)
+                if not pending:
+                    return
+                _log.info("indexing %d notes in the background", pending)
+                done = hybrid.index_pending(
+                    store,
+                    on_progress=lambda seen, total: _log.info(
+                        "  indexed %d/%d", seen, total
+                    ),
+                )
+                _log.info("indexed %d notes", done)
+                if not done:
+                    # Nothing embedded while something is still pending: the
+                    # next round would read the same rows and do the same
+                    # nothing, forever, at full speed. Stop and say so.
+                    _log.warning(
+                        "%d notes remain unembedded and a pass made no "
+                        "progress; giving up until the next write",
+                        pending,
+                    )
+                    return
     except Exception:  # noqa: BLE001 - a failed index must not take the app down
         _log.exception("background indexing failed; semantic search may be stale")
+    finally:
+        # In a finally because a flag left standing would mean no note is ever
+        # indexed again, for the life of the process, with nothing to show why.
+        with _index_state:
+            _index_running = False
+
+
+def _schedule_indexing() -> None:
+    """Start an indexing pass unless one is already running.
+
+    Called at startup and after every write that creates notes, so a note
+    captured in the browser is searchable by meaning without a restart.
+    """
+    global _index_running
+    if not indexing_enabled():
+        return
+    with _index_state:
+        if _index_running:
+            # The running pass loops until nothing is pending, so it will pick
+            # up whatever this caller just wrote.
+            return
+        _index_running = True
+    threading.Thread(
+        target=_index_in_background, name="hashline-index", daemon=True
+    ).start()
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Start the indexer without making anyone wait for it."""
-    worker = threading.Thread(
-        target=_index_in_background, name="hashline-index", daemon=True
-    )
-    worker.start()
+    _schedule_indexing()
     yield
 
 
@@ -274,6 +326,10 @@ def create_note(
                 store.add_note_with_context(
                     body, page=page or None, extra_tags=extra_tags, parent_id=parent_id
                 )
+            # A note nobody has embedded cannot be found by meaning, and
+            # waiting for a restart is not something to ask of someone who
+            # just typed a line.
+            _schedule_indexing()
         except ValueError as exc:
             error = str(exc)
     notes, notice = _timeline(
@@ -514,9 +570,15 @@ def _semantic_timeline(
             "stop the server, run `uv sync --extra ml`, and start it again"
         )
     except hybrid.NotIndexed:
+        if not indexing_enabled():
+            return [], (
+                "no notes are embedded, and indexing is switched off here. "
+                "Run `hashline index`, or restart without HASHLINE_NO_INDEX"
+            )
         return [], (
-            "no notes are embedded yet. Indexing starts in the background when "
-            "the server starts -- give it a moment and search again"
+            "no notes are embedded yet. Indexing runs in the background when "
+            "the server starts and after each note -- give it a moment and "
+            "search again"
         )
 
     rows = []
@@ -526,7 +588,14 @@ def _semantic_timeline(
             rows.append((note, store.tags_for_note(note.id), 0))
     notice = None
     if result.pending:
-        notice = f"{result.pending} notes are still being indexed"
+        # Only claim work is happening when it is. With indexing switched off
+        # these notes are not queued for anything, and saying otherwise leaves
+        # the user waiting for a pass that will never come.
+        notice = (
+            f"{result.pending} notes are still being indexed"
+            if indexing_enabled()
+            else f"{result.pending} notes are not indexed; run `hashline index`"
+        )
     return rows, notice
 
 
@@ -754,6 +823,7 @@ def import_notes(
     else:
         stored = store.add_notes(drafts)
         notice = f"imported {len(stored)} notes from {len(documents)} files"
+        _schedule_indexing()
 
     return import_page(notice=notice)
 
