@@ -2420,7 +2420,30 @@ class TestSemanticSearch:
     def test_a_half_indexed_library_says_how_much_is_left(
         self, seeded: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A short answer with no explanation reads as "there is nothing else"."""
+        """A short answer with no explanation reads as "there is nothing else".
+
+        The suite runs with indexing switched off, so the honest wording here
+        is that the notes are not indexed -- see
+        `test_a_running_indexer_says_the_work_is_under_way` for the other half.
+        """
+        monkeypatch.setattr("hashline.ml.embed.is_available", lambda: True)
+        monkeypatch.setattr(
+            "hashline.ml.embed.load_model", lambda name=None: _FakeEmbedder([1.0, 0.0])
+        )
+        self._embed(tmp_path, {1: [1.0, 0.0]})
+        body = seeded.get("/notes", params={"q": "bm25", "semantic": "true"}).text
+        assert "1 notes are not indexed" in body
+
+    def test_a_running_indexer_says_the_work_is_under_way(
+        self, seeded: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The page may only claim work is happening when it is.
+
+        With indexing enabled a pass really is queued, so "still being
+        indexed" is true. With it switched off nothing is coming, and the
+        same sentence would leave the reader waiting for it.
+        """
+        monkeypatch.delenv("HASHLINE_NO_INDEX", raising=False)
         monkeypatch.setattr("hashline.ml.embed.is_available", lambda: True)
         monkeypatch.setattr(
             "hashline.ml.embed.load_model", lambda name=None: _FakeEmbedder([1.0, 0.0])
@@ -2446,7 +2469,7 @@ class TestSemanticSearch:
             "/notes", data={"body": "another", "q": "bm25", "semantic": "true"}
         )
         assert response.status_code == 200
-        assert "1 notes are still being indexed" in response.text
+        assert "1 notes are not indexed" in response.text
 
     def test_a_plain_search_never_touches_the_backend(
         self, seeded: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -2524,3 +2547,156 @@ class TestStartupIndexing:
         web_app._index_in_background()
         with Store.open(tmp_path / "hashline.db") as store:
             assert len(list(store.iter_embeddings(embedding_key()))) == 1
+
+
+class TestIndexingAfterAWrite:
+    """A note written in the browser must not wait for a restart.
+
+    Indexing used to run once, from the lifespan, and nothing called it
+    again -- so a note captured in the web UI was invisible to semantic
+    search until the server was restarted, while the page said it was
+    "still being indexed".
+    """
+
+    @pytest.fixture(autouse=True)
+    def _enabled(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[int]]:
+        """Open the gate the suite normally keeps shut, and record passes."""
+        from hashline.web import app as web_app
+
+        monkeypatch.delenv("HASHLINE_NO_INDEX", raising=False)
+        monkeypatch.setattr("hashline.ml.hybrid.is_available", lambda: True)
+        # Run the worker inline so the assertions do not race a thread.
+        monkeypatch.setattr(
+            web_app.threading, "Thread", lambda **kw: _InlineThread(**kw)
+        )
+        calls: list[int] = []
+        monkeypatch.setattr(
+            "hashline.ml.hybrid.pending_count",
+            lambda store, **kw: 0 if calls else 1,
+        )
+        monkeypatch.setattr(
+            "hashline.ml.hybrid.index_pending",
+            lambda store, **kw: (calls.append(1), 1)[1],
+        )
+        yield calls
+        web_app._index_running = False
+
+    def test_capturing_a_note_schedules_a_pass(
+        self, client: TestClient, _enabled: list[int]
+    ) -> None:
+        client.post("/notes", data={"body": "a note"})
+        assert _enabled, "writing a note did not start an indexing pass"
+
+    def test_an_import_schedules_a_pass(
+        self, client: TestClient, _enabled: list[int]
+    ) -> None:
+        client.post(
+            "/import",
+            data={"mode": "line"},
+            files=[("files", ("notes.txt", b"one\ntwo\n"))],
+        )
+        assert _enabled, "importing notes did not start an indexing pass"
+
+    def test_a_second_write_does_not_start_a_second_pass(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One pass at a time. A bulk import must not spawn a thread per note.
+
+        The running pass loops until nothing is pending, so it picks up
+        whatever the second writer just wrote.
+        """
+        from hashline.web import app as web_app
+
+        started: list[int] = []
+        monkeypatch.setattr(
+            web_app.threading, "Thread", lambda **kw: _RecordingThread(started)
+        )
+        web_app._index_running = False
+        try:
+            client.post("/notes", data={"body": "one"})
+            client.post("/notes", data={"body": "two"})
+            assert len(started) == 1, f"{len(started)} passes started, expected 1"
+        finally:
+            web_app._index_running = False
+
+    def test_the_pass_looks_again_before_it_gives_up(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A note written mid-pass is invisible to the query that pass ran.
+
+        Without the second look it would sit unembedded until a restart --
+        the single-flight guard would turn every later write into a no-op.
+        """
+        from hashline.web import app as web_app
+
+        counts = iter([2, 1, 0])
+        monkeypatch.setattr(
+            "hashline.ml.hybrid.pending_count", lambda store, **kw: next(counts)
+        )
+        passes: list[int] = []
+        monkeypatch.setattr(
+            "hashline.ml.hybrid.index_pending",
+            lambda store, **kw: (passes.append(1), 1)[1],
+        )
+        web_app._index_in_background()
+        assert len(passes) == 2, f"the pass stopped after {len(passes)} rounds"
+
+    def test_a_pass_that_embeds_nothing_stops_instead_of_spinning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A round that makes no progress must not be retried forever.
+
+        Found by writing the tests above: with `index_pending` returning 0
+        while `pending_count` still reported work, the loop re-read the same
+        rows at full speed and the run never ended. A note the backend cannot
+        embed for some persistent reason would do the same in production.
+        """
+        from hashline.web import app as web_app
+
+        monkeypatch.setattr("hashline.ml.hybrid.is_available", lambda: True)
+        monkeypatch.setattr("hashline.ml.hybrid.pending_count", lambda store, **kw: 3)
+        monkeypatch.setattr("hashline.ml.hybrid.index_pending", lambda store, **kw: 0)
+        web_app._index_in_background()  # hangs forever if the guard is gone
+
+    def test_a_failure_leaves_the_next_write_able_to_index(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A flag left standing would mean nothing is ever indexed again.
+
+        Not a hypothetical: it is a module-level bool, and the failure is
+        silent -- semantic search would simply stop keeping up, for the life
+        of the process, with nothing on screen or in the log to say why.
+        """
+        from hashline.web import app as web_app
+
+        monkeypatch.setattr("hashline.ml.hybrid.is_available", lambda: True)
+
+        def boom(*args: object, **kwargs: object) -> int:
+            raise RuntimeError("model exploded")
+
+        monkeypatch.setattr("hashline.ml.hybrid.pending_count", boom)
+        web_app._index_running = True
+        web_app._index_in_background()
+        assert web_app._index_running is False
+
+
+class _InlineThread:
+    """A Thread that runs its target on start(), for deterministic tests."""
+
+    def __init__(self, **kwargs: object) -> None:
+        target = kwargs.get("target")
+        assert callable(target)
+        self._target = target
+
+    def start(self) -> None:
+        self._target()
+
+
+class _RecordingThread:
+    """A Thread that only counts having been started."""
+
+    def __init__(self, started: list[int]) -> None:
+        self._started = started
+
+    def start(self) -> None:
+        self._started.append(1)
