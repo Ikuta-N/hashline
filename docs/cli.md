@@ -6,6 +6,37 @@
 すべてのコマンドは `--db PATH` を取る。指定がなければ `$HASHLINE_DB`、
 それも無ければ `~/.local/share/hashline/hashline.db` を使う。
 
+## コマンド名の省略
+
+第 1 引数がコマンド名でなく、かつコマンド名になりえないテキスト——非 ASCII
+文字を含む、空白を含む、`#` で始まる——のとき、`add` として解釈する。
+
+```bash
+hashline 今日は寝不足だった          # = hashline add "今日は寝不足だった"
+hashline "bm25 を調べた #sqlite"     # 空白を含むので add
+hashline 眠い --tag 体調             # add のオプションもそのまま効く
+hashline list                        # コマンド名は当然コマンド
+hashline serach                      # Error: No such command 'serach'.
+                                     #        Did you mean 'search'?
+```
+
+ASCII の単語 1 つを除外してあるのは、`search` の打ち間違いが黙ってノートに
+なると、間違いに気づくのがタイムラインを見返すときになってしまうからである。
+
+## Web UI の起動
+
+引数を何も付けない `hashline` は Web UI を開く。`hashline serve` も同じで、
+`--host` / `--port` / `--reload` を取る。
+
+```bash
+hashline                          # http://127.0.0.1:8000
+hashline serve --port 9000
+hashline --db ~/notes.db serve    # CLI で指定した DB をサーバも使う
+```
+
+既定で `127.0.0.1` にのみ結び付ける。`/import` の `path` 欄がサーバ機の
+ファイルシステムを直接読むため、外向けに開かない。
+
 ## 検索
 
 ```bash

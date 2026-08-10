@@ -4,10 +4,14 @@
 アプリはインストールでき、起動し、意味検索以外はすべて動く。
 
 ```bash
-uv sync --extra ml            # torch（CPU ビルド）と sentence-transformers
-uv run hashline index         # 未埋め込みのノートを埋め込む
-uv run hashline search 眠れない --semantic
+# torch（CPU ビルド）と sentence-transformers が入る
+uv tool install "hashline[ml] @ git+https://github.com/Ikuta-N/hashline.git"
+
+hashline index                # 未埋め込みのノートを埋め込む
+hashline search 眠れない --semantic
 ```
+
+作業ツリーで動かしているなら `uv sync --extra ml` でも同じものが入る。
 
 ```
 0.0164      5  2026-08-09 22:45  昨日は寝不足で頭が回らなかった #日記  [日記]

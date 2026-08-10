@@ -29,31 +29,43 @@
 
 ## インストール
 
-Python 3.12 と [uv](https://docs.astral.sh/uv/) が要る。
+[uv](https://docs.astral.sh/uv/) があれば 1 行で入る（Python 3.12 は uv が
+用意する）。
 
 ```bash
-git clone https://github.com/Ikuta-N/hashline.git
-cd hashline
-uv sync
+uv tool install git+https://github.com/Ikuta-N/hashline.git
+```
+
+これで `hashline` コマンドが使えるようになる。意味検索も使うなら
+
+```bash
+uv tool install "hashline[ml] @ git+https://github.com/Ikuta-N/hashline.git"
 ```
 
 ## 使ってみる
 
 ```bash
-# 記録する
-uv run hashline add "FTS5 の bm25 を調べた #sqlite #検索"
+# 記録する。add と打たなくてよい
+hashline 今日は寝不足だった
+hashline "FTS5 の bm25 を調べた #sqlite #検索"
 
 # 読み返す（新しい順）
-uv run hashline list
-uv run hashline list --tag sqlite
+hashline list
+hashline list --tag sqlite
 
 # 全文検索（一致度の高い順）
-uv run hashline search bm25
+hashline search bm25
 ```
 
 ```
-    1  2026-08-10 13:38  FTS5 の bm25 を調べた #sqlite #検索  [sqlite, 検索]
+    2  2026-08-10 16:56  FTS5 の bm25 を調べた #sqlite #検索  [sqlite, 検索]
+    1  2026-08-10 16:56  今日は寝不足だった
 ```
+
+コマンド名でないテキスト——日本語を含む、空白を含む、`#` で始まる——は
+ノートとして解釈される。打ち間違い（`hashline serach`）が黙ってノートに
+ならないよう、ASCII の単語 1 つはコマンド扱いのままにしてある。明示したい
+ときは従来どおり `hashline add "..."` と書ける。
 
 データベースの場所は `--db PATH` で指定する。指定がなければ `$HASHLINE_DB`、
 それも無ければ `~/.local/share/hashline/hashline.db` を使う。
@@ -64,16 +76,20 @@ uv run hashline search bm25
 
 ## Web UI
 
+引数なしで起動する。
+
 ```bash
-uv run uvicorn hashline.web.app:app --reload
+hashline
 # http://127.0.0.1:8000
+
+hashline serve --port 9000   # ポートを変えるなら
 ```
 
 ![hashline の Web UI: コンテキスト帯、複数行の入力欄、semantic トグル、
 そして章・節・項の入れ子として取り込まれた Markdown 文書](docs/web-ui.png)
 
-CLI と同じデータベース（`$HASHLINE_DB` を尊重する）に対して、記録・絞り込
-み・打ちながらの検索ができる。CLI との対応表は
+CLI と同じデータベース（`--db` も `$HASHLINE_DB` も尊重する）に対して、
+記録・絞り込み・打ちながらの検索ができる。CLI との対応表は
 [設計メモ](docs/design.md#web-ui-と-cli-の対応)。
 
 > **注意:** `/import` と `/bib/import` の `path` 欄は、サーバを動かしている
@@ -85,9 +101,11 @@ CLI と同じデータベース（`$HASHLINE_DB` を尊重する）に対して�
 文字ではなく意味でノートを引く。入れなくてもアプリは問題なく動く。
 
 ```bash
-uv sync --extra ml            # torch（CPU ビルド）と sentence-transformers
-uv run hashline index         # 未埋め込みのノートを埋め込む
-uv run hashline search 眠れない --semantic
+# torch（CPU ビルド）と sentence-transformers が入る
+uv tool install "hashline[ml] @ git+https://github.com/Ikuta-N/hashline.git"
+
+hashline index                # 未埋め込みのノートを埋め込む
+hashline search 眠れない --semantic
 ```
 
 ```
@@ -102,9 +120,13 @@ uv run hashline search 眠れない --semantic
 ## 開発
 
 ```bash
+git clone https://github.com/Ikuta-N/hashline.git
+cd hashline
 uv sync --dev          # 開発ツール。ml エクストラは入らない
+
 uv run ruff check .
 uv run mypy src
+uv run hashline --help # 作業ツリーのまま動かす
 ```
 
 ### テスト
