@@ -4,14 +4,17 @@ A thin shell over the core: this module owns all filesystem I/O and all
 formatting, and holds no note logic of its own.
 """
 
+import ipaddress
+import os
 import re
 from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Final, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
 import typer
+from typer.core import TyperGroup
 
 from hashline.bib import parse_bibtex
 from hashline.files import read_documents
@@ -27,6 +30,11 @@ if TYPE_CHECKING:
 _BODY_WIDTH: Final = 90
 _WHITESPACE_RE: Final = re.compile(r"\s+")
 
+#: The web UI reads and writes the notes database and its import routes read
+#: the local filesystem, so it is served to this machine only unless asked.
+_DEFAULT_HOST: Final = "127.0.0.1"
+_DEFAULT_PORT: Final = 8000
+
 
 class Mode(StrEnum):
     """How an imported document is cut into notes."""
@@ -36,10 +44,53 @@ class Mode(StrEnum):
     outline = "outline"
 
 
+def _looks_like_a_note(token: str) -> bool:
+    """Would ``hashline TOKEN ...`` be someone writing a note, not a command?
+
+    Only text a command name could never be counts: an option is left to the
+    group, and a lone ASCII word stays a command so that a mistyped
+    ``hashline serach`` is still an error with a suggestion rather than a note
+    nobody meant to write.
+    """
+    if token.startswith("-"):
+        return False
+    return (
+        any(ord(char) > 127 for char in token)
+        or _WHITESPACE_RE.search(token) is not None
+        or token.startswith("#")
+    )
+
+
+class _NoteFriendlyGroup(TyperGroup):
+    """Resolve ``hashline <text>`` as ``hashline add <text>``.
+
+    ``add`` is the command typed most often and the one whose name carries the
+    least information, so text that cannot be a command name goes to it.
+    """
+
+    # ``ctx`` is annotated loosely because Typer vendors its own copy of Click
+    # (``typer._click``); its Context type has no public import path, and
+    # naming click's would not match the base signature.
+    def resolve_command(
+        self, ctx: Any, args: list[str]
+    ) -> tuple[str | None, Any, list[str]]:
+        if args and self.get_command(ctx, args[0]) is None:
+            if _looks_like_a_note(args[0]):
+                # The arguments are passed on untouched, so the text is read as
+                # ``add``'s positional and --tag/--page still apply.
+                return "add", self.get_command(ctx, "add"), args
+        return super().resolve_command(ctx, args)
+
+
 app = typer.Typer(
-    no_args_is_help=True,
+    cls=_NoteFriendlyGroup,
+    invoke_without_command=True,
+    no_args_is_help=False,
     add_completion=False,
-    help="Local-first micro-notes: one line, inline #hashtags, fast retrieval.",
+    help=(
+        "Local-first micro-notes: one line, inline #hashtags, fast retrieval.\n\n"
+        "`hashline TEXT` writes a note; `hashline` on its own opens the web UI."
+    ),
 )
 
 
@@ -52,6 +103,8 @@ def main(
     ] = None,
 ) -> None:
     ctx.obj = db if db is not None else default_db_path()
+    if ctx.invoked_subcommand is None:
+        _run_server(cast(Path, ctx.obj), host=_DEFAULT_HOST, port=_DEFAULT_PORT)
 
 
 def _open(ctx: typer.Context) -> Store:
@@ -719,6 +772,70 @@ def read_stop(ctx: typer.Context) -> None:
     with _open(ctx) as store:
         store.clear_context()
     typer.echo("context cleared")
+
+
+@app.command()
+def serve(
+    ctx: typer.Context,
+    host: Annotated[
+        str,
+        typer.Option(
+            "--host", help="Interface to bind. Off loopback exposes your files."
+        ),
+    ] = _DEFAULT_HOST,
+    port: Annotated[int, typer.Option("--port", "-p", help="Port to bind.")] = (
+        _DEFAULT_PORT
+    ),
+    reload: Annotated[
+        bool, typer.Option("--reload", help="Restart when hashline's own code changes.")
+    ] = False,
+) -> None:
+    """Open the web UI on the same database. Running `hashline` alone does this."""
+    _run_server(cast(Path, ctx.obj), host=host, port=port, reload=reload)
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _run_server(db: Path, *, host: str, port: int, reload: bool = False) -> None:
+    # Imported here rather than at module level: uvicorn pulls in its whole
+    # server stack, and no other command needs it.
+    import uvicorn
+
+    # The web adapter resolves the database itself, through
+    # ``default_db_path()``, so this is how `hashline --db PATH` reaches it.
+    os.environ["HASHLINE_DB"] = str(db)
+    if not _is_loopback(host):
+        # Nothing here authenticates, and `/import` reads any path the server
+        # process can read. Binding wider than this machine hands both to
+        # whoever else is on the network, so say so where it is being done.
+        typer.echo(
+            f"warning: {host} is reachable from other machines. Nothing asks "
+            "for a password, and the import page reads any file this user can "
+            "read.",
+            err=True,
+        )
+    typer.echo(f"hashline on http://{host}:{port}  (Ctrl-C to stop)", err=True)
+    # uvicorn watches the working directory by default, which is wherever the
+    # notes are, not where hashline is installed -- and an installed copy is
+    # never under it. Watch the package instead. Left None without --reload,
+    # which uvicorn would otherwise warn about.
+    reload_dirs = [str(Path(__file__).parent)] if reload else None
+    # An import string, not the app object: --reload has nothing to re-import
+    # otherwise.
+    uvicorn.run(
+        "hashline.web.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+        reload_dirs=reload_dirs,
+    )
 
 
 def _format_read_status(store: Store) -> str:
