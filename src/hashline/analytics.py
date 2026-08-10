@@ -7,8 +7,8 @@ over time, tag trends, reading and thread summaries. It sits where
 ``hashline.ml.hybrid`` sits -- above the core, below the adapters -- and reads
 a :class:`~hashline.store.Store` through its public API only.
 
-``pandas`` costs about 1.2 seconds to import, next to about 40 ms for the rest
-of the app, so it must never load on a path someone takes to capture a note.
+``pandas`` costs about 240 ms to import, next to about 40 ms for the rest of
+the app, so it must never load on a path someone takes to capture a note.
 Every function here imports pandas inside its own body, never at module
 level -- copy this shape from ``hashline.ml.embed``, which does the same for
 ``sentence_transformers``. ``tests/test_analytics.py`` asserts that importing
@@ -114,15 +114,41 @@ def _check_freq(freq: str) -> None:
         raise ValueError(f"freq must be one of {sorted(_ALLOWED_FREQ)}, got {freq!r}")
 
 
+#: The largest value SQLite will take as an INTEGER. Past it, the driver
+#: raises `OverflowError`, which is neither a `ValueError` an adapter catches
+#: nor a message anyone can act on.
+_MAX_TOP: int = 2**63 - 1
+
+
+def _check_top(top: int) -> None:
+    """Reject a `top` that SQLite cannot use as a LIMIT.
+
+    Checked here, at the boundary, for the same reason `freq` is: both end up
+    as a query parameter, and the errors SQLite gives back for them are worse
+    than the ones this module can give. Zero and below are not merely useless
+    -- `LIMIT -1` means *no limit* in SQLite, so a negative `top` silently
+    returns every tag and turns the cap into its opposite.
+    """
+    if not 1 <= top <= _MAX_TOP:
+        raise ValueError(f"top must be between 1 and {_MAX_TOP}, got {top}")
+
+
 def activity(store: Store, *, freq: str = "D") -> pd.DataFrame:
     """Notes per period, zero-filled where a period has no notes.
 
-    Returns a frame indexed by the period start (tz-aware UTC, named
+    Returns a frame indexed by the bucket label (tz-aware UTC, named
     ``period``), spanning every ``freq`` bucket from the first note to the
     last, with one ``count`` column (int64). A period with no notes is a row
     of 0, not a missing row -- a gap in a chart built from this frame is a
     real gap, not an artifact of the data being absent. ``freq`` must be one
     of ``"D"``, ``"W"`` or ``"ME"``; anything else raises ``ValueError``.
+
+    pandas labels a resample bucket by its **right** edge, so a label is the
+    end of the period it counts, not the start: ``"W"`` gives the
+    week-ending Sunday (the index reports ``freq='W-SUN'``) and ``"ME"`` the
+    last day of the month. Only ``"D"`` is unambiguous. A caller writing an
+    axis label should read the index that way -- "week ending", not "week
+    of".
     """
     _check_freq(freq)
     import pandas as pd
@@ -150,14 +176,17 @@ def tag_trend(store: Store, *, freq: str = "W", top: int = 10) -> pd.DataFrame:
     """Note counts per (period, tag), wide form: periods as rows, tags as columns.
 
     Rows are exactly the periods :func:`activity` would produce for this
-    ``freq`` -- the full range spanned by every note, zero-filled. Columns
+    ``freq`` -- the full range spanned by every note, zero-filled, and
+    labelled by each bucket's right edge for the reason given there. Columns
     are the ``top`` most-used tags overall (:meth:`Store.list_tags`,
     most-used first), so the table stays readable on a library with hundreds
     of tags. A cell is how many notes in that period carried that tag, 0
     rather than missing where none did. ``freq`` is checked exactly as in
-    :func:`activity`.
+    :func:`activity`, and ``top`` must be at least 1 and small enough for
+    SQLite to take as a ``LIMIT``; anything else raises ``ValueError``.
     """
     _check_freq(freq)
+    _check_top(top)
     import pandas as pd
 
     periods = activity(store, freq=freq).index

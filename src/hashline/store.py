@@ -86,6 +86,10 @@ def default_db_path() -> Path:
 #: anything shorter than that.
 _MIN_TRIGRAM_QUERY: Final = 3
 
+#: The largest value SQLite binds as an INTEGER. Past it the driver raises
+#: OverflowError, which no adapter catches and no reader can act on.
+_MAX_LIMIT: Final = 2**63 - 1
+
 #: The app_state row the pinned Context is stored under, as one JSON blob.
 _CONTEXT_KEY: Final = "context"
 
@@ -430,7 +434,18 @@ class Store:
         return int(count)
 
     def list_tags(self, *, limit: int | None = None) -> list[TagCount]:
-        """Return tags that are in use, most used first, ties broken by name."""
+        """Return tags that are in use, most used first, ties broken by name.
+
+        ``limit`` is a cap, so it must be a usable one: ``None`` means no
+        limit, and anything below 1 or past what SQLite takes as an INTEGER
+        raises ``ValueError``. The check lives here rather than in each caller
+        because it is a property of the LIMIT this method issues -- ``LIMIT
+        -1`` is SQLite for *no limit*, which turns a cap into its opposite,
+        and a larger integer than the driver can bind raises ``OverflowError``,
+        which is neither catchable as a ``ValueError`` nor readable.
+        """
+        if limit is not None and not 1 <= limit <= _MAX_LIMIT:
+            raise ValueError(f"limit must be between 1 and {_MAX_LIMIT}, got {limit}")
         sql = (
             "SELECT t.name AS name, count(nt.note_id) AS count FROM tags t "
             "JOIN note_tags nt ON nt.tag_id = t.id "

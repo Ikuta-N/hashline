@@ -301,13 +301,14 @@ uv run hashline stats --tags --csv tags.csv    # the same frame, as a file
 ```
 
 ```
-                                  title  note_count              first_note_at  pages
+                                  title  note_count              first_note_at               last_note_at        pages
 citekey
-smith2020  A Survey of Trigram Indexing           2 2026-08-10 08:19:48.748213  [12-15, 40]
+smith2020  A Survey of Trigram Indexing           2 2026-08-10 10:56:15.940450 2026-08-10 10:56:16.030477  [12-15, 40]
 ```
 
 Pages stay as written (`12-15`, `xii`, `第3章`) — they are collected, never
-parsed into numbers, because a page reference is not arithmetic.
+parsed into numbers, because a page reference is not arithmetic. On screen
+they show as a list; `--csv` joins them with `;` so the column is parseable.
 
 The same views are in the web UI at `/stats`, with the view, the period and the
 tag count as dropdowns.

@@ -1,12 +1,12 @@
 """Tests for hashline.analytics.
 
-pandas costs about 1.2s to import versus about 40ms for the rest of the app,
-so the guard tests below -- which must run before anything else in this file
-touches hashline.analytics -- are the whole reason this module is designed
-the way it is. See tests/test_ml_search.py for the same pattern applied to
+pandas costs about 240ms to import versus about 40ms for the rest of the app,
+so the guard tests below are the whole reason this module is designed the way
+it is. See tests/test_ml_search.py for the same pattern applied to
 torch/sentence_transformers.
 """
 
+import subprocess
 import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -18,16 +18,37 @@ from hashline.models import BibEntry
 from hashline.store import Store
 
 
-def test_importing_the_cli_does_not_load_pandas() -> None:
-    import hashline.cli  # noqa: F401
+def _assert_import_stays_pandas_free(module: str) -> None:
+    """Import `module` in a fresh interpreter and check pandas stayed out.
 
-    assert "pandas" not in sys.modules
+    `sys.modules` is process-wide, so asserting against it in-process only
+    tests whichever test happened to run first: any earlier test that reaches
+    `hashline.analytics` -- `tests/test_cli.py::TestStats` does -- leaves
+    pandas loaded and fails this one. It passed by alphabetical luck, and
+    broke under `-k`, `-p no:randomly` orderings or xdist. The
+    tests/test_ml_search.py precedent is not the same shape: torch is never
+    installed in CI, so nothing can pollute it.
+
+    A subprocess is the only place the question "does importing this load
+    pandas?" is actually being asked.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", f"import {module}, sys; print('pandas' in sys.modules)"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == "False", (
+        f"importing {module} pulled pandas into sys.modules"
+    )
+
+
+def test_importing_the_cli_does_not_load_pandas() -> None:
+    _assert_import_stays_pandas_free("hashline.cli")
 
 
 def test_importing_the_web_app_does_not_load_pandas() -> None:
-    import hashline.web.app  # noqa: F401
-
-    assert "pandas" not in sys.modules
+    _assert_import_stays_pandas_free("hashline.web.app")
 
 
 @pytest.fixture
@@ -200,6 +221,22 @@ class TestTagTrend:
     def test_rejects_an_unknown_freq(self, store: Store) -> None:
         with pytest.raises(ValueError, match="freq"):
             analytics.tag_trend(store, freq="M")
+
+    @pytest.mark.parametrize("top", [0, -1, -10])
+    def test_rejects_a_top_below_one(self, store: Store, top: int) -> None:
+        """`LIMIT -1` is SQLite for *no limit*, so this cap inverted itself."""
+        store.add_note("one #a")
+        with pytest.raises(ValueError, match="top"):
+            analytics.tag_trend(store, top=top)
+
+    def test_rejects_a_top_sqlite_cannot_hold(self, store: Store) -> None:
+        """Past 2**63-1 the driver raises OverflowError, which no caller catches."""
+        with pytest.raises(ValueError, match="top"):
+            analytics.tag_trend(store, top=2**63)
+
+    def test_the_largest_usable_top_is_accepted(self, store: Store) -> None:
+        store.add_note("one #a")
+        assert list(analytics.tag_trend(store, top=2**63 - 1).columns) == ["a"]
 
     def test_empty_store_gives_an_empty_frame(self, store: Store) -> None:
         df = analytics.tag_trend(store)

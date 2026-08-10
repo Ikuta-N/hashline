@@ -345,14 +345,19 @@ def stats(
         bool, typer.Option("--threads", help="One row per thread root.")
     ] = False,
     freq: Annotated[
-        str,
+        str | None,
         typer.Option(
-            "--freq", help="Resample frequency for --activity/--tags: D, W or ME."
+            "--freq",
+            help="Resample frequency for --activity/--tags. D, W or ME; "
+            "defaults to D.",
         ),
-    ] = "D",
+    ] = None,
     top: Annotated[
-        int, typer.Option("--top", help="How many tags to keep, with --tags.")
-    ] = 10,
+        int | None,
+        typer.Option(
+            "--top", help="How many tags to keep, with --tags. Defaults to 10."
+        ),
+    ] = None,
     csv: Annotated[
         Path | None,
         typer.Option("--csv", help="Also write the selected frame here as CSV."),
@@ -364,6 +369,11 @@ def stats(
     count, and the first/last note dates. Exactly one of --activity,
     --tags, --reading, --threads may be given; two at once is a
     `typer.BadParameter`, not a silent pick-the-first.
+
+    --freq shapes --activity and --tags; --top shapes --tags. Passing one
+    where it does nothing is a `typer.BadParameter` too: a command strict
+    enough to refuse two selectors should not accept an option and then
+    quietly discard it.
 
     --csv writes the selected frame to PATH, in addition to printing it.
     With no selector, --csv writes the overview as a one-row frame (its
@@ -384,6 +394,13 @@ def stats(
             "only one of --activity, --tags, --reading, --threads may be given"
         )
 
+    # Defaulting to None is what makes "was it passed?" answerable at all;
+    # the real defaults are applied at the call.
+    if freq is not None and not (activity_flag or tags_flag):
+        raise typer.BadParameter("--freq only applies to --activity or --tags")
+    if top is not None and not tags_flag:
+        raise typer.BadParameter("--top only applies to --tags")
+
     import pandas as pd
 
     from hashline import analytics
@@ -391,12 +408,16 @@ def stats(
     with _open(ctx) as store:
         if activity_flag:
             try:
-                df = analytics.activity(store, freq=freq)
+                df = analytics.activity(store, freq="D" if freq is None else freq)
             except ValueError as exc:
                 raise typer.BadParameter(str(exc)) from exc
         elif tags_flag:
             try:
-                df = analytics.tag_trend(store, freq=freq, top=top)
+                df = analytics.tag_trend(
+                    store,
+                    freq="D" if freq is None else freq,
+                    top=10 if top is None else top,
+                )
             except ValueError as exc:
                 raise typer.BadParameter(str(exc)) from exc
         elif reading_flag:
@@ -410,12 +431,39 @@ def stats(
     if csv is not None:
         # UTC on the way to a file: a CSV is read by a program, and the
         # timestamps the store keeps are the unambiguous ones.
-        df.to_csv(csv, index=bool(chosen))
+        _for_csv(df).to_csv(csv, index=bool(chosen))
 
     if chosen:
         typer.echo(_in_local_time(df).to_string())
     else:
         typer.echo(_format_overview(overview))
+
+
+#: Separator for a cell holding several values in the CSV. Page references are
+#: free-form (`12-15`, `xii`, `第3章`) and a comma is the field separator, so
+#: this is the punctuation least likely to appear inside one.
+_CSV_LIST_SEP: Final = ";"
+
+
+def _for_csv(frame: "pd.DataFrame") -> "pd.DataFrame":
+    """Flatten list-valued cells so the file is readable by a program.
+
+    `reading_summary` collects pages as a `list[str]`, which `to_csv` writes
+    as the Python repr `"['12-15', '40']"` -- unparseable by any CSV consumer,
+    which is the one audience this file has. On screen the list renders fine,
+    so only the copy on its way to disk is changed.
+    """
+    flattened = frame.copy()
+    for column in flattened.columns:
+        values = flattened[column]
+        if values.dtype == object and any(isinstance(v, list) for v in values):
+            flattened[column] = [
+                _CSV_LIST_SEP.join(str(item) for item in value)
+                if isinstance(value, list)
+                else value
+                for value in values
+            ]
+    return flattened
 
 
 def _in_local_time(frame: "pd.DataFrame") -> "pd.DataFrame":
@@ -424,8 +472,17 @@ def _in_local_time(frame: "pd.DataFrame") -> "pd.DataFrame":
     The overview and `hashline list` already print local time, so leaving the
     frames in UTC made one command report the same note at two different hours
     depending on which flag you passed.
+
+    Each timestamp is converted on its own, the way `_format_overview` does it.
+    Reading one offset off `datetime.now()` and applying it to the whole column
+    would print a January note at a July offset -- the same split this function
+    exists to close, just moved from the flag to the calendar. Note that
+    `pd.Timestamp.astimezone` is an alias for `tz_convert` and demands an
+    argument, so the trip through `to_pydatetime` is what gets the no-argument
+    `astimezone` that follows the reader's zone across DST.
     """
-    here = datetime.now().astimezone().tzinfo
+    import pandas as pd
+
     localised = frame.copy()
     # The index of activity/tag_trend is a bucket, not an instant. Shifting it
     # would label a UTC day "09:00" for a reader nine hours ahead, which says
@@ -433,7 +490,9 @@ def _in_local_time(frame: "pd.DataFrame") -> "pd.DataFrame":
     for column in localised.columns:
         values = localised[column]
         if values.dtype.kind == "M" and getattr(values.dt, "tz", None) is not None:
-            localised[column] = values.dt.tz_convert(here).dt.tz_localize(None)
+            localised[column] = pd.to_datetime(
+                [ts.to_pydatetime().astimezone().replace(tzinfo=None) for ts in values]
+            ).astype("datetime64[ns]")
     return localised
 
 
@@ -462,7 +521,10 @@ def tags(
 ) -> None:
     """List tags in use, most used first."""
     with _open(ctx) as store:
-        counts = store.list_tags(limit=limit)
+        try:
+            counts = store.list_tags(limit=limit)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         if not counts:
             typer.echo("no tags yet")
             return

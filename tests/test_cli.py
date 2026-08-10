@@ -1,5 +1,7 @@
 """Smoke tests for the CLI adapter: wiring, not note logic."""
 
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -496,6 +498,26 @@ class TestStats:
         assert "popular" in output
         assert "rare" not in output
 
+    @pytest.mark.parametrize("top", ["-1", "0", "99999999999999999999"])
+    def test_an_unusable_top_is_a_bad_parameter_not_a_traceback(
+        self, db: Path, top: str
+    ) -> None:
+        """`--top -1` used to mean *every tag*: SQLite reads LIMIT -1 as none.
+
+        `"Traceback" not in output` cannot express this: CliRunner captures
+        the exception instead of printing it, so an uncaught OverflowError
+        leaves the output EMPTY and a non-zero exit -- both of which that
+        assertion happily accepts. Verified by stubbing the guard out: the
+        test passed with the bug restored. What distinguishes the two is
+        whether an exception escaped at all, and whether the message a user
+        needs actually reached them.
+        """
+        run(db, "add", "a #popular")
+        result = runner.invoke(app, ["--db", str(db), "stats", "--tags", "--top", top])
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "top must be between" in result.output
+
     def test_reading_selector(self, db: Path) -> None:
         run(db, "bib", "import", str(BIB_FIXTURE))
         run(db, "read", "start", "smith2020")
@@ -521,6 +543,57 @@ class TestStats:
         assert "period" in contents
         assert "rust" in contents
         assert "2" in contents
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["--reading", "--freq", "W"],
+            ["--threads", "--freq", "W"],
+            ["--freq", "W"],
+            ["--reading", "--top", "3"],
+            ["--activity", "--top", "3"],
+            ["--top", "3"],
+        ],
+    )
+    def test_an_option_that_would_do_nothing_is_refused(
+        self, db: Path, args: list[str]
+    ) -> None:
+        """Refusing two selectors but silently discarding --freq was inconsistent."""
+        run(db, "add", "one #rust")
+        result = runner.invoke(app, ["--db", str(db), "stats", *args])
+        assert result.exit_code != 0
+        assert "only applies to" in result.output
+
+    @pytest.mark.parametrize(
+        "args", [["--activity", "--freq", "W"], ["--tags", "--freq", "W"]]
+    )
+    def test_freq_is_accepted_where_it_applies(self, db: Path, args: list[str]) -> None:
+        run(db, "add", "one #rust")
+        assert "period" in run(db, "stats", *args)
+
+    def test_csv_pages_are_joined_not_a_python_repr(
+        self, db: Path, tmp_path: Path
+    ) -> None:
+        """A CSV is read by a program, so `"['12-15', '40']"` served no one."""
+        import csv as csv_module
+
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020")
+        run(db, "add", "first", "--page", "12-15")
+        run(db, "add", "second", "--page", "第3章")
+        csv_path = tmp_path / "reading.csv"
+        run(db, "stats", "--reading", "--csv", str(csv_path))
+
+        with csv_path.open(encoding="utf-8", newline="") as handle:
+            row = next(iter(csv_module.DictReader(handle)))
+        assert row["pages"] == "12-15;第3章"
+
+    def test_csv_pages_stay_a_list_on_screen(self, db: Path) -> None:
+        """Only the copy on its way to disk is flattened."""
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020")
+        run(db, "add", "first", "--page", "12-15")
+        assert "[12-15]" in run(db, "stats", "--reading")
 
     def test_csv_with_no_selector_writes_the_overview(
         self, db: Path, tmp_path: Path
@@ -863,6 +936,31 @@ class TestStatsTimezone:
             f"the overview says {hour!r} but --threads reports\n{threads}"
         )
 
+    @pytest.mark.skipif(
+        not hasattr(time, "tzset"), reason="TZ only takes effect on POSIX"
+    )
+    def test_a_winter_note_is_not_printed_at_a_summer_offset(
+        self, db: Path, monkeypatch: pytest.MonkeyPatch, in_zone: None
+    ) -> None:
+        """The offset belongs to the timestamp, not to the moment of running.
+
+        `test_event_timestamps_print_in_local_time` above cannot catch this on
+        its own: it captures "now", so both sides agree whenever the run and
+        the note fall in the same half of the year. Seeding a January note and
+        reading it from a July-ish zone is what splits a per-instant conversion
+        from a snapshot of `datetime.now()`.
+        """
+        monkeypatch.setenv("TZ", "America/Los_Angeles")
+        time.tzset()
+        with Store.open(db) as store:
+            store.add_note(
+                "a winter note", created_at=datetime(2026, 1, 15, 20, tzinfo=UTC)
+            )
+
+        # 20:00 UTC in January is 12:00 PST. A fixed PDT offset would say 13:00.
+        assert "2026-01-15 12:00:00" in run(db, "stats", "--threads")
+        assert "2026-01-15 12:00" in run(db, "stats")
+
     def test_period_buckets_stay_in_utc(self, db: Path) -> None:
         """A bucket is not an instant.
 
@@ -871,3 +969,51 @@ class TestStatsTimezone:
         """
         run(db, "add", "a note")
         assert "+00:00" in run(db, "stats", "--activity")
+
+
+class TestListTagsLimit:
+    """The cap belongs to the LIMIT, so it is checked where the LIMIT is issued.
+
+    `hashline stats --tags --top` was fixed one call away from this, while
+    `hashline tags --limit` -- the other caller of `Store.list_tags` -- still
+    read `-1` as *every tag* and blew up on a large integer.
+    """
+
+    def test_a_negative_limit_is_refused_not_read_as_no_limit(
+        self, db: Path
+    ) -> None:
+        for index in range(3):
+            run(db, "add", f"note {index} #tag{index}")
+        result = runner.invoke(app, ["--db", str(db), "tags", "--limit", "-1"])
+        assert result.exit_code != 0
+        assert "limit must be between" in result.output
+
+    def test_a_limit_sqlite_cannot_bind_is_refused(self, db: Path) -> None:
+        run(db, "add", "a #tag")
+        result = runner.invoke(
+            app, ["--db", str(db), "tags", "--limit", "99999999999999999999"]
+        )
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "limit must be between" in result.output
+
+    def test_a_usable_limit_still_caps(self, db: Path) -> None:
+        for index in range(3):
+            run(db, "add", f"note {index} #tag{index}")
+        assert len(run(db, "tags", "--limit", "2").splitlines()) == 2
+
+
+class TestStatsFreqEdges:
+    def test_an_empty_freq_is_refused_like_any_other_bad_one(self, db: Path) -> None:
+        """`freq or "D"` read "" as "not given" and printed daily buckets.
+
+        The guard above it asks `is not None`, so an empty string had already
+        been accepted as "the user passed --freq" -- and then silently became
+        the default anyway.
+        """
+        run(db, "add", "a note")
+        result = runner.invoke(
+            app, ["--db", str(db), "stats", "--activity", "--freq", ""]
+        )
+        assert result.exit_code != 0
+        assert "freq must be one of" in result.output
