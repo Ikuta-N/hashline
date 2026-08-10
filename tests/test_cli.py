@@ -534,6 +534,30 @@ class TestStats:
         assert "rust" in contents
         assert "2" in contents
 
+    def test_csv_pages_are_joined_not_a_python_repr(
+        self, db: Path, tmp_path: Path
+    ) -> None:
+        """A CSV is read by a program, so `"['12-15', '40']"` served no one."""
+        import csv as csv_module
+
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020")
+        run(db, "add", "first", "--page", "12-15")
+        run(db, "add", "second", "--page", "第3章")
+        csv_path = tmp_path / "reading.csv"
+        run(db, "stats", "--reading", "--csv", str(csv_path))
+
+        with csv_path.open(encoding="utf-8", newline="") as handle:
+            row = next(iter(csv_module.DictReader(handle)))
+        assert row["pages"] == "12-15;第3章"
+
+    def test_csv_pages_stay_a_list_on_screen(self, db: Path) -> None:
+        """Only the copy on its way to disk is flattened."""
+        run(db, "bib", "import", str(BIB_FIXTURE))
+        run(db, "read", "start", "smith2020")
+        run(db, "add", "first", "--page", "12-15")
+        assert "[12-15]" in run(db, "stats", "--reading")
+
     def test_csv_with_no_selector_writes_the_overview(
         self, db: Path, tmp_path: Path
     ) -> None:

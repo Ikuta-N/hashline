@@ -410,12 +410,39 @@ def stats(
     if csv is not None:
         # UTC on the way to a file: a CSV is read by a program, and the
         # timestamps the store keeps are the unambiguous ones.
-        df.to_csv(csv, index=bool(chosen))
+        _for_csv(df).to_csv(csv, index=bool(chosen))
 
     if chosen:
         typer.echo(_in_local_time(df).to_string())
     else:
         typer.echo(_format_overview(overview))
+
+
+#: Separator for a cell holding several values in the CSV. Page references are
+#: free-form (`12-15`, `xii`, `第3章`) and a comma is the field separator, so
+#: this is the punctuation least likely to appear inside one.
+_CSV_LIST_SEP: Final = ";"
+
+
+def _for_csv(frame: "pd.DataFrame") -> "pd.DataFrame":
+    """Flatten list-valued cells so the file is readable by a program.
+
+    `reading_summary` collects pages as a `list[str]`, which `to_csv` writes
+    as the Python repr `"['12-15', '40']"` -- unparseable by any CSV consumer,
+    which is the one audience this file has. On screen the list renders fine,
+    so only the copy on its way to disk is changed.
+    """
+    flattened = frame.copy()
+    for column in flattened.columns:
+        values = flattened[column]
+        if values.dtype == object and any(isinstance(v, list) for v in values):
+            flattened[column] = [
+                _CSV_LIST_SEP.join(str(item) for item in value)
+                if isinstance(value, list)
+                else value
+                for value in values
+            ]
+    return flattened
 
 
 def _in_local_time(frame: "pd.DataFrame") -> "pd.DataFrame":
