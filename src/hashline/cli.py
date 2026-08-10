@@ -345,14 +345,14 @@ def stats(
         bool, typer.Option("--threads", help="One row per thread root.")
     ] = False,
     freq: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--freq", help="Resample frequency for --activity/--tags: D, W or ME."
         ),
-    ] = "D",
+    ] = None,
     top: Annotated[
-        int, typer.Option("--top", help="How many tags to keep, with --tags.")
-    ] = 10,
+        int | None, typer.Option("--top", help="How many tags to keep, with --tags.")
+    ] = None,
     csv: Annotated[
         Path | None,
         typer.Option("--csv", help="Also write the selected frame here as CSV."),
@@ -364,6 +364,11 @@ def stats(
     count, and the first/last note dates. Exactly one of --activity,
     --tags, --reading, --threads may be given; two at once is a
     `typer.BadParameter`, not a silent pick-the-first.
+
+    --freq shapes --activity and --tags; --top shapes --tags. Passing one
+    where it does nothing is a `typer.BadParameter` too: a command strict
+    enough to refuse two selectors should not accept an option and then
+    quietly discard it.
 
     --csv writes the selected frame to PATH, in addition to printing it.
     With no selector, --csv writes the overview as a one-row frame (its
@@ -384,6 +389,13 @@ def stats(
             "only one of --activity, --tags, --reading, --threads may be given"
         )
 
+    # Defaulting to None is what makes "was it passed?" answerable at all;
+    # the real defaults are applied at the call.
+    if freq is not None and not (activity_flag or tags_flag):
+        raise typer.BadParameter("--freq only applies to --activity or --tags")
+    if top is not None and not tags_flag:
+        raise typer.BadParameter("--top only applies to --tags")
+
     import pandas as pd
 
     from hashline import analytics
@@ -391,12 +403,14 @@ def stats(
     with _open(ctx) as store:
         if activity_flag:
             try:
-                df = analytics.activity(store, freq=freq)
+                df = analytics.activity(store, freq=freq or "D")
             except ValueError as exc:
                 raise typer.BadParameter(str(exc)) from exc
         elif tags_flag:
             try:
-                df = analytics.tag_trend(store, freq=freq, top=top)
+                df = analytics.tag_trend(
+                    store, freq=freq or "D", top=10 if top is None else top
+                )
             except ValueError as exc:
                 raise typer.BadParameter(str(exc)) from exc
         elif reading_flag:

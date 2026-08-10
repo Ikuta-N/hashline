@@ -534,6 +534,33 @@ class TestStats:
         assert "rust" in contents
         assert "2" in contents
 
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["--reading", "--freq", "W"],
+            ["--threads", "--freq", "W"],
+            ["--freq", "W"],
+            ["--reading", "--top", "3"],
+            ["--activity", "--top", "3"],
+            ["--top", "3"],
+        ],
+    )
+    def test_an_option_that_would_do_nothing_is_refused(
+        self, db: Path, args: list[str]
+    ) -> None:
+        """Refusing two selectors but silently discarding --freq was inconsistent."""
+        run(db, "add", "one #rust")
+        result = runner.invoke(app, ["--db", str(db), "stats", *args])
+        assert result.exit_code != 0
+        assert "only applies to" in result.output
+
+    @pytest.mark.parametrize(
+        "args", [["--activity", "--freq", "W"], ["--tags", "--freq", "W"]]
+    )
+    def test_freq_is_accepted_where_it_applies(self, db: Path, args: list[str]) -> None:
+        run(db, "add", "one #rust")
+        assert "period" in run(db, "stats", *args)
+
     def test_csv_pages_are_joined_not_a_python_repr(
         self, db: Path, tmp_path: Path
     ) -> None:
