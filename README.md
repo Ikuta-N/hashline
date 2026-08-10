@@ -215,9 +215,15 @@ The Web UI implements equivalent functionality to the CLI commands:
 | `hashline import` | `POST /import` (also supports browser uploads) |
 | `hashline bib import` | `POST /bib/import` (also supports browser uploads) |
 | `hashline export` | `GET /export`, `GET /export/download` |
-| `hashline index` | runs by itself when the server starts |
+| `hashline index` | runs by itself, at startup and after each write |
+| `hashline tags` | *CLI only* |
 | `hashline search --semantic` | the **semantic** toggle beside the search box |
 | `hashline stats` | `GET /stats` |
+
+Filtering by a tag works in the browser — `/?tag=NAME`, and every control
+carries the filter — but **listing the tags you use is CLI only**. The chips
+that used to sit under the search box grew without bound as tags accumulated,
+so they were removed rather than paginated.
 
 One deliberate difference: `hashline read start` replaces the pinned tags, while `POST /context/read` adds the reading tag to them. The context strip shows the pinned tags and the pinned work side by side with a clear button each, so starting a read there should not empty the column next to it.
 
@@ -245,9 +251,13 @@ file.
 
 In the web UI it is the **semantic** checkbox beside the search box, and there
 is nothing to run first: the server embeds whatever is unembedded in a
-background thread as it starts, so the page is usable immediately and results
-improve as the pass finishes. Set `HASHLINE_NO_INDEX=1` to skip that. Without
-the extra installed the toggle says so instead of returning nothing.
+background thread when it starts **and again after every note you write**, so a
+note captured in the browser becomes searchable by meaning without a restart.
+One pass runs at a time and keeps looking until nothing is left, so a bulk
+import does not start a thread per note. Set `HASHLINE_NO_INDEX=1` to switch it
+off — the page then says notes are *not indexed* rather than claiming a pass is
+under way. Without the extra installed the toggle says so instead of returning
+nothing.
 
 `hashline index` walks `notes_without_embedding`, so re-running it costs
 nothing; `--rebuild` re-embeds everything and `--limit` stops early. A search
