@@ -1017,3 +1017,103 @@ class TestStatsFreqEdges:
         )
         assert result.exit_code != 0
         assert "freq must be one of" in result.output
+
+
+class TestImplicitAdd:
+    """`hashline TEXT` is `hashline add TEXT`: the note is what gets typed most."""
+
+    def test_japanese_text_becomes_a_note(self, db: Path) -> None:
+        output = run(db, "今日は寝不足だった")
+        assert "今日は寝不足だった" in output
+
+    def test_text_with_spaces_becomes_a_note(self, db: Path) -> None:
+        output = run(db, "bm25 を調べた #sqlite")
+        assert "[sqlite]" in output
+
+    def test_text_starting_with_a_hash_becomes_a_note(self, db: Path) -> None:
+        output = run(db, "#日記 晴れ")
+        assert "[日記]" in output
+
+    def test_the_add_options_still_apply(self, db: Path) -> None:
+        output = run(db, "眠い", "--tag", "体調")
+        assert "[体調]" in output
+
+    def test_a_command_name_is_still_a_command(self, db: Path) -> None:
+        run(db, "add", "a note")
+        assert "a note" in run(db, "list")
+
+    def test_a_mistyped_command_is_an_error_not_a_note(self, db: Path) -> None:
+        """The reason a lone ASCII word is left alone.
+
+        Sending every unknown word to `add` would turn a typo into a note that
+        nobody meant to write, and the mistake would only surface later, in the
+        timeline.
+        """
+        result = runner.invoke(app, ["--db", str(db), "serach"])
+        assert result.exit_code != 0
+        assert "No such command 'serach'" in result.output
+        assert "no notes yet" in run(db, "list")
+
+    def test_an_option_is_left_to_the_group(self, db: Path) -> None:
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "Usage:" in result.output
+
+
+class TestServe:
+    """`hashline` with no command opens the web UI."""
+
+    @pytest.fixture
+    def calls(self, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+        """Record what `serve` would hand uvicorn, without binding a port."""
+        import uvicorn
+
+        recorded: list[dict[str, object]] = []
+
+        def fake_run(target: str, **kwargs: object) -> None:
+            recorded.append({"target": target, **kwargs})
+
+        monkeypatch.setattr(uvicorn, "run", fake_run)
+        # Registered with monkeypatch so that _run_server's write is undone.
+        monkeypatch.setenv("HASHLINE_DB", "")
+        return recorded
+
+    def test_no_command_opens_the_web_ui(
+        self, db: Path, calls: list[dict[str, object]]
+    ) -> None:
+        result = runner.invoke(app, ["--db", str(db)])
+        assert result.exit_code == 0, result.output
+        assert calls == [
+            {
+                "target": "hashline.web.app:app",
+                "host": "127.0.0.1",
+                "port": 8000,
+                "reload": False,
+            }
+        ]
+
+    def test_serve_passes_its_options_through(
+        self, db: Path, calls: list[dict[str, object]]
+    ) -> None:
+        result = runner.invoke(
+            app, ["--db", str(db), "serve", "--port", "9000", "--reload"]
+        )
+        assert result.exit_code == 0, result.output
+        assert calls[0]["port"] == 9000
+        assert calls[0]["reload"] is True
+
+    def test_the_db_option_reaches_the_server(
+        self, db: Path, calls: list[dict[str, object]]
+    ) -> None:
+        """The web adapter resolves the database itself, from the environment."""
+        import os
+
+        runner.invoke(app, ["--db", str(db), "serve"])
+        assert os.environ["HASHLINE_DB"] == str(db)
+
+    def test_the_default_host_is_this_machine(
+        self, db: Path, calls: list[dict[str, object]]
+    ) -> None:
+        """The import routes read the local filesystem; do not offer them around."""
+        runner.invoke(app, ["--db", str(db), "serve"])
+        assert calls[0]["host"] == "127.0.0.1"
