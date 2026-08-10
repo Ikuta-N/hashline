@@ -787,7 +787,7 @@ def serve(
         _DEFAULT_PORT
     ),
     reload: Annotated[
-        bool, typer.Option("--reload", help="Restart on source changes.")
+        bool, typer.Option("--reload", help="Restart when hashline's own code changes.")
     ] = False,
 ) -> None:
     """Open the web UI on the same database. Running `hashline` alone does this."""
@@ -822,9 +822,20 @@ def _run_server(db: Path, *, host: str, port: int, reload: bool = False) -> None
             err=True,
         )
     typer.echo(f"hashline on http://{host}:{port}  (Ctrl-C to stop)", err=True)
+    # uvicorn watches the working directory by default, which is wherever the
+    # notes are, not where hashline is installed -- and an installed copy is
+    # never under it. Watch the package instead. Left None without --reload,
+    # which uvicorn would otherwise warn about.
+    reload_dirs = [str(Path(__file__).parent)] if reload else None
     # An import string, not the app object: --reload has nothing to re-import
     # otherwise.
-    uvicorn.run("hashline.web.app:app", host=host, port=port, reload=reload)
+    uvicorn.run(
+        "hashline.web.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+        reload_dirs=reload_dirs,
+    )
 
 
 def _format_read_status(store: Store) -> str:

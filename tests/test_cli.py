@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
+from hashline import cli
 from hashline.cli import app
 from hashline.ml import embed, hybrid
 from hashline.store import Store
@@ -1089,6 +1090,7 @@ class TestServe:
                 "host": "127.0.0.1",
                 "port": 8000,
                 "reload": False,
+                "reload_dirs": None,
             }
         ]
 
@@ -1136,3 +1138,21 @@ class TestServe:
         for host in ("127.0.0.1", "::1", "localhost"):
             result = runner.invoke(app, ["--db", str(db), "serve", "--host", host])
             assert "reachable from other machines" not in result.output
+
+    def test_reload_watches_hashline_not_the_notes_directory(
+        self, db: Path, calls: list[dict[str, object]]
+    ) -> None:
+        """uvicorn watches the working directory unless told otherwise.
+
+        Installed as a tool, hashline's sources are never under the directory
+        someone runs it from, so the flag would watch the notes and miss the
+        code it claims to reload on.
+        """
+        runner.invoke(app, ["--db", str(db), "serve", "--reload"])
+        assert calls[0]["reload_dirs"] == [str(Path(cli.__file__).parent)]
+
+    def test_no_reload_leaves_the_watcher_out_of_it(
+        self, db: Path, calls: list[dict[str, object]]
+    ) -> None:
+        runner.invoke(app, ["--db", str(db), "serve"])
+        assert calls[0]["reload_dirs"] is None
