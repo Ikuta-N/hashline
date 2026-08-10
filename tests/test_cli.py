@@ -1,5 +1,7 @@
 """Smoke tests for the CLI adapter: wiring, not note logic."""
 
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -862,6 +864,31 @@ class TestStatsTimezone:
         assert hour in threads, (
             f"the overview says {hour!r} but --threads reports\n{threads}"
         )
+
+    @pytest.mark.skipif(
+        not hasattr(time, "tzset"), reason="TZ only takes effect on POSIX"
+    )
+    def test_a_winter_note_is_not_printed_at_a_summer_offset(
+        self, db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The offset belongs to the timestamp, not to the moment of running.
+
+        `test_event_timestamps_print_in_local_time` above cannot catch this on
+        its own: it captures "now", so both sides agree whenever the run and
+        the note fall in the same half of the year. Seeding a January note and
+        reading it from a July-ish zone is what splits a per-instant conversion
+        from a snapshot of `datetime.now()`.
+        """
+        monkeypatch.setenv("TZ", "America/Los_Angeles")
+        time.tzset()
+        with Store.open(db) as store:
+            store.add_note(
+                "a winter note", created_at=datetime(2026, 1, 15, 20, tzinfo=UTC)
+            )
+
+        # 20:00 UTC in January is 12:00 PST. A fixed PDT offset would say 13:00.
+        assert "2026-01-15 12:00:00" in run(db, "stats", "--threads")
+        assert "2026-01-15 12:00" in run(db, "stats")
 
     def test_period_buckets_stay_in_utc(self, db: Path) -> None:
         """A bucket is not an instant.

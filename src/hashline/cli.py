@@ -424,8 +424,17 @@ def _in_local_time(frame: "pd.DataFrame") -> "pd.DataFrame":
     The overview and `hashline list` already print local time, so leaving the
     frames in UTC made one command report the same note at two different hours
     depending on which flag you passed.
+
+    Each timestamp is converted on its own, the way `_format_overview` does it.
+    Reading one offset off `datetime.now()` and applying it to the whole column
+    would print a January note at a July offset -- the same split this function
+    exists to close, just moved from the flag to the calendar. Note that
+    `pd.Timestamp.astimezone` is an alias for `tz_convert` and demands an
+    argument, so the trip through `to_pydatetime` is what gets the no-argument
+    `astimezone` that follows the reader's zone across DST.
     """
-    here = datetime.now().astimezone().tzinfo
+    import pandas as pd
+
     localised = frame.copy()
     # The index of activity/tag_trend is a bucket, not an instant. Shifting it
     # would label a UTC day "09:00" for a reader nine hours ahead, which says
@@ -433,7 +442,9 @@ def _in_local_time(frame: "pd.DataFrame") -> "pd.DataFrame":
     for column in localised.columns:
         values = localised[column]
         if values.dtype.kind == "M" and getattr(values.dt, "tz", None) is not None:
-            localised[column] = values.dt.tz_convert(here).dt.tz_localize(None)
+            localised[column] = pd.to_datetime(
+                [ts.to_pydatetime().astimezone().replace(tzinfo=None) for ts in values]
+            ).astype("datetime64[ns]")
     return localised
 
 
